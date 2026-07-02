@@ -1,4 +1,5 @@
-const BASE_URL = "http://localhost:8080/api/v1";
+// Dynamically switches depending on whether you are running npm run dev locally or live on Vercel
+const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080/api/v1";
 
 export interface CreateWorkspaceRequest {
   name: string;
