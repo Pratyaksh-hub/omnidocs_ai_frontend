@@ -1,26 +1,78 @@
+/* stylelint-disable at-rule-no-unknown */
+
+/* Core Tailwind v4 engine layer entry hook */
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/* 
+  CRITICAL TAILWIND V4 FIX: This registers the custom layout class strategy manually.
+  Without this, v4 ignores manual client toggles and locks onto system OS preference
+*/
+/* stylelint-disable-next-line at-rule-no-unknown */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* stylelint-disable-next-line at-rule-no-unknown */
+@theme {
+  /* Dynamic Design Tokens shared across all templates seamlessly */
+  --color-app-bg: var(--app-bg);
+  --color-card-bg: var(--card-bg);
+  --color-card-border: var(--card-border);
+  --color-text-main: var(--text-primary);
+  --color-text-muted: var(--text-secondary);
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
+@layer base {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --app-bg: #f4f4f5;          /* zinc-100 Light Canvas */
+    --card-bg: #ffffff;         /* Pure White Paper Cards */
+    --card-border: #e4e4e7;     /* zinc-200 Light Borders */
+    --text-primary: #18181b;    /* zinc-900 Ultra Dark Text */
+    --text-secondary: #71717a;  /* zinc-500 Light Muted Text */
+  }
+
+  .dark {
+    --app-bg: #09090b;          /* zinc-950 Smooth Dark Canvas */
+    --card-bg: #121214;         /* zinc-900 Dark Paper Cards */
+    --card-border: #27272a;     /* zinc-800 Deep Dark Borders */
+    --text-primary: #f4f4f5;    /* zinc-100 Crisp Light Text */
+    --text-secondary: #a1a1aa;  /* zinc-400 Muted Dark Text */
+  }
+
+  /* AUTOMATIC CORE BINDINGS */
+  html, body {
+    background-color: var(--app-bg) !important;
+    color: var(--text-primary) !important;
+    transition-property: color, background-color, border-color;
+    transition-duration: 200ms;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  h1, h2, h3, h4 {
+    color: var(--text-primary) !important;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* 
+  PRODUCTION GLOBAL SEMANTIC ABSTRACT PRIMITIVES
+  These clean up your component syntax by removing code duplication.
+*/
+@utility sys-card {
+  background-color: var(--card-bg);
+  border-color: var(--card-border);
+  border-width: 1px;
+  border-style: solid;
+  border-radius: 1rem; /* rounded-2xl */
+  padding: 1.5rem; /* p-6 */
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@utility sys-panel {
+  background-color: var(--card-bg);
+  border-color: var(--card-border);
+  border-width: 1px;
+  border-style: solid;
+  border-radius: 1rem; /* rounded-2xl */
+  padding: 2rem; /* p-8 */
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1);
 }
