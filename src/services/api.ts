@@ -1,6 +1,22 @@
-// Dynamically switches depending on whether you are running npm run dev locally or live on Vercel
-// Production API boundary configuration
-const BASE_URL = process.env.NEXT_PUBLIC_API_URL;
+// 1. Read raw URL string from your process environment pipeline
+const RAW_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+
+// 2. Production Resilient Prefix Builder Logic
+const getSanitizedBaseUrl = (url: string): string => {
+  // Remove any accidental trailing slashes first
+  let cleanUrl = url.replace(/\/+$/, "");
+  
+  // Explicitly force the path prefix onto the engine stream if missing
+  if (!cleanUrl.endsWith("/api/v1")) {
+    cleanUrl = `${cleanUrl}/api/v1`;
+  }
+  
+  return cleanUrl;
+};
+
+const BASE_URL = getSanitizedBaseUrl(RAW_URL);
+
+console.log("OmniDocs Engine Hooked To API Channel:", BASE_URL);
 export interface CreateWorkspaceRequest {
   name: string;
   description?: string;
@@ -99,8 +115,8 @@ export const api = {
   },
 
   getTrashDocuments: async (page = 0, size = 50, nocache = false): Promise<PaginatedResponse<DocumentSummaryResponse>> => {
-    // Hits your exact global backend endpoint path
-    let url = `http://localhost:8080/api/v1/documents/deleted?page=${page}&size=${size}`;
+    // FIXED: Swapped out hardcoded localhost for the dynamic environment fallback variable
+    let url = `${BASE_URL}/documents/deleted?page=${page}&size=${size}`;
     if (nocache) {
       url += `&_t=${Date.now()}`;
     }
