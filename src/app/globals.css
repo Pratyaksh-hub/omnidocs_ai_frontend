@@ -3,6 +3,15 @@
 /* Core Tailwind v4 engine layer entry hook */
 @import "tailwindcss";
 
+/* Force the browser engine's system components to shift matching your class toggles */
+html {
+  color-scheme: light;
+}
+
+html.dark {
+  color-scheme: dark;
+}
+
 /* 
   CRITICAL TAILWIND V4 FIX: This registers the custom layout class strategy manually.
   Without this, v4 ignores manual client toggles and locks onto system OS preference
@@ -75,4 +84,48 @@
   padding: 2rem; /* p-8 */
   box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
   transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* HIGH-CONTRAST GREY ON GREY SCROLLBAR ARCHITECTURE */
+@layer base {
+  * {
+    scrollbar-width: thin;
+  }
+
+  /* Layout Width Setup */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  
+  /* 1. Track Background Configuration */
+  ::-webkit-scrollbar-track {
+    background: #f4f4f5 !important; /* zinc-100: Soft light grey layout background */
+    border-radius: 4px;
+  }
+  
+  .dark ::-webkit-scrollbar-track {
+    background: #27272a !important; /* zinc-800: Dark slate grey sidebar background */
+  }
+
+  /* 2. Slider Thumb Configuration */
+  ::-webkit-scrollbar-thumb {
+    background: #d4d4d8 !important; /* zinc-300: Lighter grey slider bar */
+    border: 2px solid #f4f4f5;       /* Masks edge to prevent pixel bleed */
+    border-radius: 9999px;
+  }
+
+  .dark ::-webkit-scrollbar-thumb {
+    background: #52525b !important; /* zinc-600: Mid-tone grey slider bar */
+    border: 2px solid #27272a;       /* Masks edge against dark track */
+  }
+
+  /* 3. Interactive Hover Adjustments */
+  ::-webkit-scrollbar-thumb:hover {
+    background: #a1a1aa !important; /* zinc-400 */
+  }
+  
+  .dark ::-webkit-scrollbar-thumb:hover {
+    background: #71717a !important; /* zinc-500 */
+  }
 }

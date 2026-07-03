@@ -15,22 +15,11 @@ export default function DashboardPage() {
 
   async function calculateDashboardMetrics(forceRefresh = false) {
     try {
-      const workspaceList = await api.getAllWorkspaces(0, 100, forceRefresh);
-      setTotalWorkspaces(workspaceList.length);
-
-      const documentFetchPromises = workspaceList.map(async (workspace) => {
-        try {
-          const pageableData = await api.getWorkspaceDocuments(workspace.uuid, 0, 1, forceRefresh);
-          return pageableData.totalElements || 0; 
-        } catch {
-          return 0;
-        }
-      });
-
-      const results = await Promise.all(documentFetchPromises);
-      const documentCountAccumulator = results.reduce((sum, count) => sum + count, 0);
+      const metrics = await api.getDashboardMetrics(forceRefresh);
       
-      setTotalDocuments(documentCountAccumulator);
+      // Defensively parse values to prevent undefined blocks breaking state updates
+      setTotalWorkspaces(metrics.totalWorkspaces || 0);
+      setTotalDocuments(metrics.totalDocuments || 0);
     } catch (err) {
       console.error("Failed to generate global system stats updates:", err);
     } finally {
@@ -40,18 +29,15 @@ export default function DashboardPage() {
   }
 
   useEffect(() => {
-    let isMounted = true;
-
-    (async () => {
-      if (isMounted) {
-        await calculateDashboardMetrics(false);
-      }
-    })();
+    // Triggers safely on browser frame layout paint sequences
+    const syncTokenId = setTimeout(() => {
+      calculateDashboardMetrics(false);
+    }, 0);
 
     return () => {
-      isMounted = false;
+      clearTimeout(syncTokenId);
     };
-  }, []);
+  }, []); // Fires consistently whenever the parent layout shell swaps components
 
   const handleManualRefresh = () => {
     setIsRefreshing(true);
@@ -62,7 +48,7 @@ export default function DashboardPage() {
     return (
       <AppLayout>
         <div className="flex h-96 items-center justify-center gap-2 text-zinc-500 dark:text-zinc-400">
-          <Loader2 className="animate-spin" size={24} />
+          <Loader2 className="animate-spin text-blue-600" size={24} />
           <span className="text-sm font-medium">Aggregating cross-workspace metrics...</span>
         </div>
       </AppLayout>
@@ -71,9 +57,7 @@ export default function DashboardPage() {
 
   return (
     <AppLayout>
-      <div className="space-y-10">
-        
-        {/* Upper Branding Bar */}
+      <div className="space-y-10 animate-in fade-in duration-300">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
             <div className="flex items-center gap-3">
@@ -93,7 +77,6 @@ export default function DashboardPage() {
               Here is an aggregate live overview of your connected cloud engine.
             </p>
           </div>
-          
           <Link 
             href="/workspace"
             className="flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-blue-700 self-start sm:self-center"
@@ -103,14 +86,12 @@ export default function DashboardPage() {
           </Link>
         </div>
 
-        {/* Dynamic Statistics Grid */}
         <div className="grid gap-6 md:grid-cols-3">
           <StatsCard title="Total Assigned Documents" value={totalDocuments.toString()} />
           <StatsCard title="Active Workspaces" value={totalWorkspaces.toString()} />
           <StatsCard title="AI Engine Credits" value="1,240" />
         </div>
 
-        {/* Informational Hero Segment */}
         <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-8 shadow-xs transition-colors duration-300">
           <h2 className="text-xl font-bold text-zinc-900 dark:text-white">Getting Started</h2>
           <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400 leading-relaxed max-w-2xl">

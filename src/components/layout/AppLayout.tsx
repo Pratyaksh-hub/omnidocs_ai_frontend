@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LayoutDashboard, Folder, Trash2, Shield, Sun, Moon } from "lucide-react";
+import LogoutButton from "@/components/auth/LogoutButton";
 
 interface AppLayoutProps {
   children: React.ReactNode;
@@ -11,27 +12,30 @@ interface AppLayoutProps {
 
 export default function AppLayout({ children }: AppLayoutProps) {
   const pathname = usePathname();
-  const [darkMode, setDarkMode] = useState<boolean>(() => {
-    if (typeof window === "undefined") {
-      return false;
-    }
-
-    const savedTheme = localStorage.getItem("theme");
-    return (
-      savedTheme === "dark" ||
-      (!savedTheme && window.matchMedia("(prefers-color-scheme: dark)").matches)
-    );
-  });
   const [isHydrated, setIsHydrated] = useState<boolean>(false);
 
+  // FIX: Read directly from localStorage safely inside a lazy initializer function.
+  // This executes synchronously once when the state is instantiated on the client.
+  const [darkMode, setDarkMode] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    
+    const savedTheme = localStorage.getItem("theme");
+    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    return savedTheme === "dark" || (!savedTheme && prefersDark);
+  });
+
+  // Track hydration state over a simple requestAnimationFrame loop
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => setIsHydrated(true));
     return () => window.cancelAnimationFrame(frame);
   }, []);
 
+  // Sync the DOM class token list explicitly when darkMode or hydration shifts
   useEffect(() => {
-    document.documentElement.classList.toggle("dark", darkMode);
-  }, [darkMode]);
+    if (isHydrated) {
+      document.documentElement.classList.toggle("dark", darkMode);
+    }
+  }, [darkMode, isHydrated]);
 
   const toggleTheme = () => {
     const nextDarkMode = !darkMode;
@@ -100,6 +104,11 @@ export default function AppLayout({ children }: AppLayoutProps) {
             </div>
             <span className="text-[10px] uppercase font-bold text-zinc-400 dark:text-zinc-500 tracking-wider">Toggle</span>
           </button>
+
+          {/* Connected Session Logout Trigger Component */}
+          <div className="border-t border-zinc-200/50 dark:border-zinc-700/50 pt-2">
+            <LogoutButton />
+          </div>
 
           <div className="flex items-center justify-between px-2 text-[11px] font-medium text-zinc-400 dark:text-zinc-500">
             <span>Server Cluster Status</span>

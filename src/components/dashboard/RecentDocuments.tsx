@@ -1,17 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api } from "@/services/api";
+import { api, DocumentSummaryResponse, BASE_URL } from "@/services/api";
 import { FileText, Loader2, Download, Bot, Eye, Send, Maximize2, Minimize2, X, Trash2 } from "lucide-react";
-
-interface DocumentSummaryResponse {
-  documentUuid: string;
-  originalFileName: string;
-  contentType: string;
-  fileSize: number;
-  status: string;
-  createdAt: string;
-}
 
 interface RecentDocumentsProps {
   currentWorkspaceUuid: string;
@@ -27,7 +18,6 @@ export default function RecentDocuments({ currentWorkspaceUuid }: RecentDocument
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   
-  // AI Sidebar Interactive Panel States
   const [activeChatDoc, setActiveChatDoc] = useState<DocumentSummaryResponse | null>(null);
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
   const [chatInput, setChatInput] = useState("");
@@ -48,8 +38,6 @@ export default function RecentDocuments({ currentWorkspaceUuid }: RecentDocument
       }
     }
 
-    // Defer fetching to avoid synchronous setState within effect which can
-    // trigger cascading renders. Schedule on next tick.
     const id = setTimeout(() => {
       fetchDocs();
     }, 0);
@@ -62,12 +50,12 @@ export default function RecentDocuments({ currentWorkspaceUuid }: RecentDocument
 
     setDeletingId(uuid);
     try {
-      await fetch(`http://localhost:8080/api/v1/documents/${uuid}`, {
+      // FIXED: Swapped localhost out for dynamic platform string interpolation mapping
+      await fetch(`${BASE_URL}/documents/${uuid}`, {
         method: "DELETE"
       });
       
       setDocs((prev) => prev.filter((doc) => doc.documentUuid !== uuid));
-      
       if (activeChatDoc?.documentUuid === uuid) {
         closeAiChat();
       }
@@ -80,11 +68,11 @@ export default function RecentDocuments({ currentWorkspaceUuid }: RecentDocument
   };
 
   const handleDownload = (uuid: string) => {
-    window.open(`http://localhost:8080/api/v1/documents/${uuid}/download?inline=false`, "_blank");
+    window.open(`${BASE_URL}/documents/${uuid}/download?inline=false`, "_blank");
   };
 
   const handleViewInline = (uuid: string) => {
-    window.open(`http://localhost:8080/api/v1/documents/${uuid}/download?inline=true`, "_blank");
+    window.open(`${BASE_URL}/documents/${uuid}/download?inline=true`, "_blank");
   };
 
   const openAiChat = (doc: DocumentSummaryResponse) => {
@@ -110,12 +98,7 @@ export default function RecentDocuments({ currentWorkspaceUuid }: RecentDocument
     setIsAiThinking(true);
 
     try {
-      // Narrow the api shape for optional AI helper to avoid using `any`
-      const apiWithAi = api as { processDocWithAI?: (uuid: string) => Promise<unknown> };
-      if (typeof apiWithAi.processDocWithAI === "function") {
-        await apiWithAi.processDocWithAI(activeChatDoc.documentUuid);
-      }
-      
+      await api.processDocWithAI(activeChatDoc.documentUuid);
       setChatHistory((prev) => [
         ...prev, 
         { sender: "ai", text: `Processed query successfully for Document ID: ${activeChatDoc.documentUuid}. [Engine Signal: Core embeddings look stable inside your Java console context].` }
@@ -144,13 +127,11 @@ export default function RecentDocuments({ currentWorkspaceUuid }: RecentDocument
       </h2>
 
       {docs.length === 0 ? (
-        /* CORRECTED DARK/LIGHT MIXED THEME FALLBACK HERO CONTAINER */
         <div className="rounded-2xl border border-dashed border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-12 text-center transition-colors duration-300">
           <p className="text-sm text-zinc-500 dark:text-zinc-400 font-medium">No documents found in this workspace yet.</p>
           <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-1">Upload files directly to view them listed live.</p>
         </div>
       ) : (
-        /* WIDENED 2-COLUMN DECK LAYOUT */
         <div className="grid gap-6 md:grid-cols-2">
           {docs.map((doc) => (
             <div 
@@ -189,7 +170,6 @@ export default function RecentDocuments({ currentWorkspaceUuid }: RecentDocument
                 </button>
               </div>
 
-              {/* THREE WIDE HOVER ACTION BUTTON BAR */}
               <div className="mt-6 flex items-center gap-3 border-t border-zinc-100 dark:border-zinc-800 pt-4">
                 <button
                   onClick={() => handleViewInline(doc.documentUuid)}
@@ -220,14 +200,12 @@ export default function RecentDocuments({ currentWorkspaceUuid }: RecentDocument
         </div>
       )}
 
-      {/* INTELLIGENT AI DRAWER AND COMPANION SIDEBAR OVERLAY */}
       {activeChatDoc && (
         <div 
           className={`fixed top-0 right-0 h-full bg-white dark:bg-zinc-900 shadow-2xl border-l border-zinc-200 dark:border-zinc-800 z-50 flex flex-col transition-all duration-300 ${
             isSidebarExpanded ? "w-full" : "w-120"
           }`}
         >
-          {/* Header Controls */}
           <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/50">
             <div className="min-w-0">
               <span className="text-[10px] uppercase font-bold text-blue-600 dark:text-blue-400 tracking-wider">Contextual AI Assistant</span>
@@ -242,7 +220,6 @@ export default function RecentDocuments({ currentWorkspaceUuid }: RecentDocument
               >
                 {isSidebarExpanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
               </button>
-              
               <button 
                 onClick={closeAiChat}
                 className="p-2 text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition-colors"
@@ -252,7 +229,6 @@ export default function RecentDocuments({ currentWorkspaceUuid }: RecentDocument
             </div>
           </div>
 
-          {/* Chat Messages Log Body */}
           <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-zinc-50/30 dark:bg-zinc-950/20">
             {chatHistory.map((msg, i) => (
               <div key={i} className={`flex ${msg.sender === "user" ? "justify-end" : "justify-start"}`}>
@@ -275,7 +251,6 @@ export default function RecentDocuments({ currentWorkspaceUuid }: RecentDocument
             )}
           </div>
 
-          {/* Input Prompt Footer Panel */}
           <form onSubmit={handleSendQuery} className="p-4 border-t border-zinc-100 dark:border-zinc-800 bg-white dark:bg-zinc-900">
             <div className="flex items-center gap-2 rounded-xl border border-zinc-200 dark:border-zinc-700 px-3 py-2 bg-zinc-50 dark:bg-zinc-800/50 focus-within:border-blue-500 focus-within:bg-white dark:focus-within:bg-zinc-900 focus-within:ring-2 focus-within:ring-blue-50/50 transition-all">
               <input
