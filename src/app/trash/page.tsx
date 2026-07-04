@@ -3,7 +3,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import AppLayout from "@/components/layout/AppLayout";
 import AlertBanner from "@/components/shared/AlertBanner";
-// import { api, DocumentSummaryResponse } from "@/services/api";
 import { documentApi, DocumentSummaryResponse } from "@/lib/api";
 import { Trash2, Loader2, RefreshCw, Undo2, AlertCircle, FileText, Folder, Check, X } from "lucide-react";
 
