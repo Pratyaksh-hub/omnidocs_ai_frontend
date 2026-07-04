@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import AppLayout from "@/components/layout/AppLayout";
 import { ShieldAlert, ShieldCheck, ToggleLeft, ToggleRight, Loader2, RefreshCw, KeyRound, Lock, Binary, Cpu } from "lucide-react";
-import { SecurityPoolItem } from "@/services/api";
+import { SecurityPoolItem } from "@/lib/api";
 
 export default function SecurityPoolsPage() {
   const [pools, setPools] = useState<SecurityPoolItem[]>([]);
