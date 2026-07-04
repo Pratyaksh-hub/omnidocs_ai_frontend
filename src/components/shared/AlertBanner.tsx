@@ -7,7 +7,7 @@ export interface AlertBannerProps {
   /** Explicit success message text string */
   success?: string | null;
   /** Direct error instance, raw string, or parsed backend exception payload */
-  error?: unknown | null; // FIXED: Swapped 'any' out for 'unknown' to pass strict linting rules
+  error?: unknown | null;
   /** Optional function to clear messages (if provided, renders a close trigger icon button) */
   onClose?: () => void;
 }
@@ -66,7 +66,7 @@ export default function AlertBanner({ success, error, onClose }: AlertBannerProp
         <button
           onClick={onClose}
           type="button"
-          className={`shrink-0 rounded-lg p-0.5 transition hover:bg-black/5 dark:hover:bg-white/5 ${
+          className={`shrink-0 rounded-lg p-0.5 transition cursor-pointer hover:bg-black/5 dark:hover:bg-white/5 ${
             isSuccess ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"
           }`}
         >

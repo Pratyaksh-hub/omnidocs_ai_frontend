@@ -5,7 +5,7 @@ import AppLayout from "@/components/layout/AppLayout";
 import RecentDocuments from "@/components/dashboard/RecentDocuments";
 import AlertBanner from "@/components/shared/AlertBanner";
 import { api, WorkspaceResponse } from "@/services/api";
-import { FolderPlus, Loader2, UploadCloud, Folder, Layers, RefreshCw, X } from "lucide-react";
+import { FolderPlus, Loader2, UploadCloud, Folder, Layers, RefreshCw, X, Edit2, Check } from "lucide-react";
 
 export default function WorkspacesPage() {
   const [workspaces, setWorkspaces] = useState<WorkspaceResponse[]>([]);
@@ -18,11 +18,12 @@ export default function WorkspacesPage() {
   const [activeUuid, setActiveUuid] = useState("");
   const [activeName, setActiveName] = useState("");
 
-  // Notification States
+  // Key-refresh strategy tracking parameters
+  const [refreshKey, setRefreshKey] = useState<number>(0);
+
+  // Notification Banner States
   const [success, setSuccess] = useState<string | null>(null);
   const [error, setError] = useState<unknown | null>(null);
-  
-  // Custom Animation State Management
   const [isBannerVisible, setIsBannerVisible] = useState(false);
   const autoDismissTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const fadeOutTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -31,7 +32,11 @@ export default function WorkspacesPage() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [modalWsName, setModalWsName] = useState("");
 
-  // Wipes existing hooks to avoid stacking alerts on rapid continuous inputs
+  // Inline Rename Active Track States
+  const [editingUuid, setEditingUuid] = useState<string | null>(null);
+  const [renameInputValue, setRenameInputValue] = useState("");
+  const [isRenaming, setIsRenaming] = useState(false);
+
   const clearNotificationStates = () => {
     if (autoDismissTimeoutRef.current) clearTimeout(autoDismissTimeoutRef.current);
     if (fadeOutTimeoutRef.current) clearTimeout(fadeOutTimeoutRef.current);
@@ -40,9 +45,7 @@ export default function WorkspacesPage() {
     setError(null);
   };
 
-  // Central Controller to trigger notifications with smooth auto-fading timelines
   const triggerNotification = (successText: string | null, errorObj: unknown | null) => {
-    // Clear any previous scheduled running timers instantly
     if (autoDismissTimeoutRef.current) clearTimeout(autoDismissTimeoutRef.current);
     if (fadeOutTimeoutRef.current) clearTimeout(fadeOutTimeoutRef.current);
 
@@ -50,19 +53,16 @@ export default function WorkspacesPage() {
     setError(errorObj);
     setIsBannerVisible(true);
 
-    // Only apply the automatic 6-second fade-out timer on explicit success alerts
-    if (successText) {
-      autoDismissTimeoutRef.current = setTimeout(() => {
-        setIsBannerVisible(false); // Triggers the 1-second CSS fade-out transition
+    autoDismissTimeoutRef.current = setTimeout(() => {
+      setIsBannerVisible(false);
 
-        fadeOutTimeoutRef.current = setTimeout(() => {
-          setSuccess(null);
-        }, 1000); // Wipes the layout context state completely after visibility hits 0
-      }, 6000);
-    }
+      fadeOutTimeoutRef.current = setTimeout(() => {
+        setSuccess(null);
+        setError(null);
+      }, 1000);
+    }, 10000);
   };
 
-  // Cleanup active timeouts on component unmount
   useEffect(() => {
     return () => {
       if (autoDismissTimeoutRef.current) clearTimeout(autoDismissTimeoutRef.current);
@@ -73,14 +73,14 @@ export default function WorkspacesPage() {
   async function fetchAllSpaces(forceRefresh = false) {
     try {
       const data = await api.getAllWorkspaces(0, 100, forceRefresh);
+      setWorkspaces(data);
       
       const savedUuid = localStorage.getItem("active_workspace_uuid");
-      const savedName = localStorage.getItem("active_workspace_name");
       
-      setWorkspaces(data);
       if (savedUuid && data.some(space => space.uuid === savedUuid)) {
+        const activeMatch = data.find(space => space.uuid === savedUuid);
         setActiveUuid(savedUuid);
-        setActiveName(savedName || "Selected Workspace");
+        setActiveName(activeMatch?.name || "Selected Workspace");
       } else if (data.length > 0) {
         setActiveUuid(data[0].uuid);
         setActiveName(data[0].name);
@@ -101,16 +101,15 @@ export default function WorkspacesPage() {
     const initializeWorkspaces = async () => {
       try {
         const data = await api.getAllWorkspaces(0, 100, false);
-        
         if (!isMounted) return;
         
-        const savedUuid = localStorage.getItem("active_workspace_uuid");
-        const savedName = localStorage.getItem("active_workspace_name");
-        
         setWorkspaces(data);
+        const savedUuid = localStorage.getItem("active_workspace_uuid");
+        
         if (savedUuid && data.some(space => space.uuid === savedUuid)) {
+          const activeMatch = data.find(space => space.uuid === savedUuid);
           setActiveUuid(savedUuid);
-          setActiveName(savedName || "Selected Workspace");
+          setActiveName(activeMatch?.name || "Selected Workspace");
         } else if (data.length > 0) {
           setActiveUuid(data[0].uuid);
           setActiveName(data[0].name);
@@ -138,10 +137,14 @@ export default function WorkspacesPage() {
   const handleManualRefresh = () => {
     setIsRefreshing(true);
     clearNotificationStates();
+    setRefreshKey((prev) => prev + 1);
     fetchAllSpaces(true);
   };
 
   const selectWorkspace = (space: WorkspaceResponse) => {
+    // If clicking target while editing something else, close editor
+    if (editingUuid !== space.uuid) setEditingUuid(null);
+    
     setActiveUuid(space.uuid);
     setActiveName(space.name);
     localStorage.setItem("active_workspace_uuid", space.uuid);
@@ -175,6 +178,42 @@ export default function WorkspacesPage() {
     }
   };
 
+  // NEW: Executes Inline Patch Operation to update entity record text titles instantly
+  const handleRenameWorkspaceSubmit = async (spaceUuid: string) => {
+    if (!renameInputValue || !renameInputValue.trim() || isRenaming) return;
+
+    setIsRenaming(true);
+    try {
+      const cleanName = renameInputValue.trim();
+      const updatedWs = await api.renameWorkspace(spaceUuid, cleanName);
+
+      // Mutate sidebar state array locally instantly without causing full panel cache flickers
+      setWorkspaces((prev) =>
+        prev.map((ws) => (ws.uuid === spaceUuid ? { ...ws, name: updatedWs.name } : ws))
+      );
+
+      // If the currently viewed workspace was updated, fix its viewport headers too
+      if (activeUuid === spaceUuid) {
+        setActiveName(updatedWs.name);
+        localStorage.setItem("active_workspace_name", updatedWs.name);
+      }
+
+      setEditingUuid(null);
+      triggerNotification(`Workspace successfully renamed to "${updatedWs.name}"!`, null);
+    } catch (err) {
+      console.error(err);
+      triggerNotification(null, err);
+    } finally {
+      setIsRenaming(false);
+    }
+  };
+
+  const startRenameWorkflow = (e: React.MouseEvent, space: WorkspaceResponse) => {
+    e.stopPropagation(); // Blocks parent item row selection firing during click routine
+    setEditingUuid(space.uuid);
+    setRenameInputValue(space.name);
+  };
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -197,8 +236,7 @@ export default function WorkspacesPage() {
       }
 
       triggerNotification(`"${file.name}" uploaded to target workspace successfully!`, null);
-      setIsRefreshing(true);
-      fetchAllSpaces(true);
+      setRefreshKey((prev) => prev + 1);
     } catch (err) {
       console.error(err);
       triggerNotification(null, err);
@@ -223,7 +261,6 @@ export default function WorkspacesPage() {
     <AppLayout>
       <div className="space-y-6 text-zinc-900 dark:text-zinc-100 relative min-h-[75vh]">
         
-        {/* Animated Wrapper Container handling the 1-Second Smooth Fade-Out */}
         <div 
           className={`transition-all duration-1000 ease-in-out ${
             isBannerVisible ? "opacity-100 max-h-40 transform translate-y-0" : "opacity-0 max-h-0 overflow-hidden transform -translate-y-2 pointer-events-none"
@@ -250,7 +287,7 @@ export default function WorkspacesPage() {
                 <button 
                   onClick={handleManualRefresh}
                   disabled={isRefreshing}
-                  className="p-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-all"
+                  className="p-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-all cursor-pointer"
                   title="Bypass cache and sync databases"
                 >
                   <RefreshCw size={14} className={isRefreshing ? "animate-spin text-blue-600 dark:text-blue-400" : ""} />
@@ -258,7 +295,7 @@ export default function WorkspacesPage() {
                 <button 
                   onClick={() => { clearNotificationStates(); setShowCreateModal(true); }}
                   disabled={isCreating}
-                  className="p-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition"
+                  className="p-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition cursor-pointer"
                   title="New Workspace"
                 >
                   <FolderPlus size={14} />
@@ -266,24 +303,64 @@ export default function WorkspacesPage() {
               </div>
             </div>
 
-            {/* Left Inner Items Explorer Explorer List View */}
+            {/* Explorer List View with Inline Editor Hooks */}
             <div className="space-y-1 overflow-y-auto max-h-[70vh] pr-1">
               {workspaces.length === 0 ? (
                 <p className="text-xs text-zinc-400 dark:text-zinc-500 p-2">No active backend structures found.</p>
               ) : (
                 workspaces.map((space) => (
-                  <button
+                  <div
                     key={space.uuid}
                     onClick={() => selectWorkspace(space)}
-                    className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl text-left text-sm font-medium transition-all ${
+                    className={`group w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-left text-sm font-medium transition-all cursor-pointer ${
                       activeUuid === space.uuid 
                         ? "bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-400 font-semibold" 
                         : "text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200"
                     }`}
                   >
-                    <Folder size={16} className={activeUuid === space.uuid ? "text-blue-600 dark:text-blue-400" : "text-zinc-400 dark:text-zinc-500"} />
-                    <span className="truncate">{space.name}</span>
-                  </button>
+                    <div className="flex items-center gap-3 min-w-0 flex-1 mr-2">
+                      <Folder size={16} className={activeUuid === space.uuid ? "text-blue-600 dark:text-blue-400 shrink-0" : "text-zinc-400 dark:text-zinc-500 shrink-0"} />
+                      
+                      {editingUuid === space.uuid ? (
+                        <input
+                          type="text"
+                          value={renameInputValue}
+                          onChange={(e) => setRenameInputValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") handleRenameWorkspaceSubmit(space.uuid);
+                            if (e.key === "Escape") setEditingUuid(null);
+                          }}
+                          onClick={(e) => e.stopPropagation()} // Blocks active index switching
+                          className="w-full bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 text-xs px-2 py-1 rounded-md border border-zinc-300 dark:border-zinc-700 outline-none font-medium focus:border-blue-500"
+                          autoFocus
+                          disabled={isRenaming}
+                        />
+                      ) : (
+                        <span className="truncate">{space.name}</span>
+                      )}
+                    </div>
+
+                    {/* Editor Action Action Menu Toggle Hooks */}
+                    <div className="shrink-0 flex items-center gap-1">
+                      {editingUuid === space.uuid ? (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleRenameWorkspaceSubmit(space.uuid); }}
+                          className="p-1 rounded-md hover:bg-emerald-100 dark:hover:bg-emerald-950 text-emerald-600 transition cursor-pointer"
+                          disabled={isRenaming}
+                        >
+                          {isRenaming ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+                        </button>
+                      ) : (
+                        <button
+                          onClick={(e) => startRenameWorkflow(e, space)}
+                          className="p-1 rounded-md hover:bg-zinc-200/60 dark:hover:bg-zinc-700 text-zinc-400 dark:text-zinc-500 group-hover:text-zinc-700 dark:group-hover:text-zinc-300 opacity-0 group-hover:opacity-100 transition cursor-pointer"
+                          title="Rename workspace"
+                        >
+                          <Edit2 size={12} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
                 ))
               )}
             </div>
@@ -313,7 +390,7 @@ export default function WorkspacesPage() {
             </div>
 
             {activeUuid ? (
-              <RecentDocuments currentWorkspaceUuid={activeUuid} />
+              <RecentDocuments key={`${activeUuid}-${refreshKey}`} currentWorkspaceUuid={activeUuid} />
             ) : (
               <div className="rounded-2xl border border-dashed border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-12 text-center">
                 <p className="text-sm text-zinc-500 dark:text-zinc-400 font-medium">No active context initialized.</p>
@@ -334,7 +411,7 @@ export default function WorkspacesPage() {
               <h3 className="text-lg font-bold text-zinc-900 dark:text-white">Provision Workspace</h3>
               <button 
                 onClick={() => setShowCreateModal(false)}
-                className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 rounded-lg p-1 transition"
+                className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 rounded-lg p-1 transition cursor-pointer"
               >
                 <X size={18} />
               </button>
@@ -356,7 +433,7 @@ export default function WorkspacesPage() {
                 <button
                   type="button"
                   onClick={() => setShowCreateModal(false)}
-                  className="px-4 py-2 rounded-xl text-xs font-semibold border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300 transition"
+                  className="px-4 py-2 rounded-xl text-xs font-semibold border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300 transition cursor-pointer"
                   disabled={isCreating}
                 >
                   Cancel
@@ -364,7 +441,7 @@ export default function WorkspacesPage() {
                 <button
                   type="submit"
                   disabled={isCreating || !modalWsName.trim()}
-                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white shadow-sm flex items-center gap-1.5 transition disabled:opacity-50"
+                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white shadow-sm flex items-center gap-1.5 transition disabled:opacity-50 cursor-pointer"
                 >
                   {isCreating && <Loader2 size={12} className="animate-spin" />}
                   <span>{isCreating ? "Provisioning..." : "Provision Workspace"}</span>

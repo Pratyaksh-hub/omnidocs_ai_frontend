@@ -369,4 +369,18 @@ export const api = {
     const json = await res.json();
     return json.data || { totalWorkspaces: 0, totalDocuments: 0 };
   },
+
+  // Add this right inside your existing "export const api = { ... }" declaration block
+
+  renameWorkspace: async (workspaceUuid: string, newName: string): Promise<WorkspaceResponse> => {
+    const res = await secureFetch(`${BASE_URL}/workspaces/${workspaceUuid}/rename`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: newName.trim() }),
+    });
+
+    if (!res.ok) throw new Error("Server rejected workspace configuration rename request.");
+    const json = await res.json();
+    return json.data;
+  },
 };

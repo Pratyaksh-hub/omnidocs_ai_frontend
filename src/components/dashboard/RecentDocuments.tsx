@@ -1,275 +1,172 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { api, DocumentSummaryResponse, BASE_URL } from "@/services/api";
-import { FileText, Loader2, Download, Bot, Eye, Send, Maximize2, Minimize2, X, Trash2 } from "lucide-react";
+import React, { useState, useEffect, useCallback } from "react";
+import DocumentViewerModal from "./DocumentViewerModal";
+import { secureFetch, api, BASE_URL, DocumentSummaryResponse } from "@/services/api";
+import { Eye, Download, Loader2, FileText, RefreshCw } from "lucide-react";
 
 interface RecentDocumentsProps {
   currentWorkspaceUuid: string;
 }
 
-interface ChatMessage {
-  sender: "user" | "ai";
-  text: string;
-}
-
 export default function RecentDocuments({ currentWorkspaceUuid }: RecentDocumentsProps) {
-  const [docs, setDocs] = useState<DocumentSummaryResponse[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-  
-  const [activeChatDoc, setActiveChatDoc] = useState<DocumentSummaryResponse | null>(null);
-  const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
-  const [chatInput, setChatInput] = useState("");
-  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
-  const [isAiThinking, setIsAiThinking] = useState(false);
+  const [documents, setDocuments] = useState<DocumentSummaryResponse[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [downloadingUuid, setDownloadingUuid] = useState<string | null>(null);
+  const [activePreviewDoc, setActivePreviewDoc] = useState<DocumentSummaryResponse | null>(null);
 
-  useEffect(() => {
-    async function fetchDocs() {
-      if (!currentWorkspaceUuid) return;
+  // Core internal API data runner
+  const loadWorkspaceFiles = useCallback(async (shouldToggleLoader = false) => {
+    if (!currentWorkspaceUuid) return;
+    
+    if (shouldToggleLoader) {
       setLoading(true);
-      try {
-        const paginatedData = await api.getWorkspaceDocuments(currentWorkspaceUuid, 0, 20, true);
-        setDocs(paginatedData.content || []);
-      } catch (err) {
-        console.error("Failed to fetch documents from Spring Boot backend:", err);
-      } finally {
-        setLoading(false);
-      }
     }
-
-    const id = setTimeout(() => {
-      fetchDocs();
-    }, 0);
-
-    return () => clearTimeout(id);
+    
+    try {
+      const res = await api.getWorkspaceDocuments(currentWorkspaceUuid, 0, 50, true);
+      setDocuments(res.content || []);
+    } catch (err) {
+      console.error("Failed to gather files for context space:", err);
+    } finally {
+      setLoading(false);
+    }
   }, [currentWorkspaceUuid]);
 
-  const handleDeleteDocument = async (uuid: string, name: string) => {
-    if (!confirm(`Are you sure you want to permanently delete "${name}"?`)) return;
+  // FIXED: Handles loading trigger completely asynchronously to satisfy strict React engine linter bounds
+  useEffect(() => {
+    let isMounted = true;
 
-    setDeletingId(uuid);
-    try {
-      // FIXED: Swapped localhost out for dynamic platform string interpolation mapping
-      await fetch(`${BASE_URL}/documents/${uuid}`, {
-        method: "DELETE"
-      });
-      
-      setDocs((prev) => prev.filter((doc) => doc.documentUuid !== uuid));
-      if (activeChatDoc?.documentUuid === uuid) {
-        closeAiChat();
+    const executeAsyncLoad = async () => {
+      // Allow async macro-task loop execution to decouple state changes from direct synchronization layout blocks
+      if (isMounted) {
+        await loadWorkspaceFiles(false);
       }
-    } catch (err) {
-      console.error("Failed to safely execute deletion workflow:", err);
-      alert("Error dropping target entity from system logs.");
-    } finally {
-      setDeletingId(null);
-    }
+    };
+
+    executeAsyncLoad();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [currentWorkspaceUuid, loadWorkspaceFiles]);
+
+  const handleManualRefreshTrigger = () => {
+    loadWorkspaceFiles(true);
   };
 
-  const handleDownload = (uuid: string) => {
-    window.open(`${BASE_URL}/documents/${uuid}/download?inline=false`, "_blank");
-  };
-
-  const handleViewInline = (uuid: string) => {
-    window.open(`${BASE_URL}/documents/${uuid}/download?inline=true`, "_blank");
-  };
-
-  const openAiChat = (doc: DocumentSummaryResponse) => {
-    setActiveChatDoc(doc);
-    setChatHistory([
-      { sender: "ai", text: `Hi! I have successfully indexed "${doc.originalFileName}" using Spring AI. What insights or transformations can I extract for you today?` }
-    ]);
-  };
-
-  const closeAiChat = () => {
-    setActiveChatDoc(null);
-    setIsSidebarExpanded(false);
-    setChatInput("");
-  };
-
-  const handleSendQuery = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!chatInput.trim() || !activeChatDoc) return;
-
-    const userMessage = chatInput.trim();
-    setChatHistory((prev) => [...prev, { sender: "user", text: userMessage }]);
-    setChatInput("");
-    setIsAiThinking(true);
-
+  const executeSecureDownloadAction = async (doc: DocumentSummaryResponse) => {
+    setDownloadingUuid(doc.documentUuid);
     try {
-      await api.processDocWithAI(activeChatDoc.documentUuid);
-      setChatHistory((prev) => [
-        ...prev, 
-        { sender: "ai", text: `Processed query successfully for Document ID: ${activeChatDoc.documentUuid}. [Engine Signal: Core embeddings look stable inside your Java console context].` }
-      ]);
+      const response = await secureFetch(`${BASE_URL}/documents/${doc.documentUuid}/download?inline=false`, {
+        method: "GET"
+      });
+      if (!response.ok) throw new Error("Could not pipe download request targets.");
+
+      const fileBlob = await response.blob();
+      const localUrl = window.URL.createObjectURL(fileBlob);
+      
+      const downloadAnchor = document.createElement("a");
+      downloadAnchor.href = localUrl;
+      downloadAnchor.download = doc.originalFileName;
+      document.body.appendChild(downloadAnchor);
+      downloadAnchor.click();
+      
+      document.body.removeChild(downloadAnchor);
+      window.URL.revokeObjectURL(localUrl);
     } catch (err) {
-      console.error(err);
-      setChatHistory((prev) => [...prev, { sender: "ai", text: "Error syncing pipeline connection parameters." }]);
+      console.error("Authorized file fetch execution failure:", err);
     } finally {
-      setIsAiThinking(false);
+      setDownloadingUuid(null);
     }
   };
 
   if (loading) {
     return (
-      <div className="flex h-40 items-center justify-center gap-2 text-zinc-500 dark:text-zinc-400">
-        <Loader2 className="animate-spin" size={20} />
-        <span className="text-sm font-medium">Loading workspace artifacts...</span>
+      <div className="flex h-48 items-center justify-center gap-2 text-zinc-500">
+        <Loader2 className="animate-spin text-blue-600" size={20} />
+        <span className="text-sm font-medium">Reading indexing registries...</span>
       </div>
     );
   }
 
   return (
-    <section className="mt-10 relative">
-      <h2 className="mb-6 text-2xl font-bold tracking-tight text-zinc-900 dark:text-white">
-        Workspace Documents
-      </h2>
-
-      {docs.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-12 text-center transition-colors duration-300">
-          <p className="text-sm text-zinc-500 dark:text-zinc-400 font-medium">No documents found in this workspace yet.</p>
-          <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-1">Upload files directly to view them listed live.</p>
-        </div>
-      ) : (
-        <div className="grid gap-6 md:grid-cols-2">
-          {docs.map((doc) => (
-            <div 
-              key={doc.documentUuid} 
-              className="group relative flex flex-col justify-between rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 transition-all duration-300 hover:border-zinc-300 dark:hover:border-zinc-700 hover:shadow-xl"
-            >
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex items-center gap-4 min-w-0">
-                  <div className="p-3 bg-blue-50 dark:bg-blue-950/50 rounded-xl text-blue-600 dark:text-blue-400 shrink-0">
-                    <FileText size={28} />
-                  </div>
-                  <div className="min-w-0">
-                    <h3 className="font-semibold text-zinc-900 dark:text-zinc-100 truncate text-base" title={doc.originalFileName}>
-                      {doc.originalFileName}
-                    </h3>
-                    <div className="flex items-center gap-2 mt-1 text-xs text-zinc-400 dark:text-zinc-500 font-medium">
-                      <span className="bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 px-2 py-0.5 rounded uppercase tracking-wider text-[10px]">
-                        {doc.contentType?.split("/")[1] || "FILE"}
-                      </span>
-                      {doc.fileSize && <span>• {(doc.fileSize / 1024).toFixed(1)} KB</span>}
-                    </div>
-                  </div>
-                </div>
-
-                <button
-                  onClick={() => handleDeleteDocument(doc.documentUuid, doc.originalFileName)}
-                  disabled={deletingId === doc.documentUuid}
-                  className="p-2 text-zinc-400 dark:text-zinc-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-xl transition-all duration-200 shrink-0 disabled:opacity-40"
-                  title="Delete Document"
-                >
-                  {deletingId === doc.documentUuid ? (
-                    <Loader2 size={16} className="animate-spin" />
-                  ) : (
-                    <Trash2 size={16} />
-                  )}
-                </button>
-              </div>
-
-              <div className="mt-6 flex items-center gap-3 border-t border-zinc-100 dark:border-zinc-800 pt-4">
-                <button
-                  onClick={() => handleViewInline(doc.documentUuid)}
-                  className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 py-2.5 text-xs font-semibold text-zinc-700 dark:text-zinc-300 shadow-sm transition-all duration-200 hover:bg-zinc-100 dark:hover:bg-zinc-700 hover:border-zinc-400 dark:hover:border-zinc-500 hover:-translate-y-0.5 active:translate-y-0"
-                >
-                  <Eye size={15} />
-                  <span>View</span>
-                </button>
-
-                <button
-                  onClick={() => handleDownload(doc.documentUuid)}
-                  className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 py-2.5 text-xs font-semibold text-zinc-700 dark:text-zinc-300 shadow-sm transition-all duration-200 hover:bg-zinc-100 dark:hover:bg-zinc-700 hover:border-zinc-400 dark:hover:border-zinc-500 hover:-translate-y-0.5 active:translate-y-0"
-                >
-                  <Download size={15} />
-                  <span>Get File</span>
-                </button>
-                
-                <button
-                  onClick={() => openAiChat(doc)}
-                  className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-zinc-900 dark:bg-zinc-800 py-2.5 text-xs font-semibold text-white dark:text-zinc-200 shadow-sm transition-all duration-200 hover:bg-blue-600 hover:shadow-lg hover:shadow-blue-500/20 hover:-translate-y-0.5 active:translate-y-0"
-                >
-                  <Bot size={15} className="text-blue-400 group-hover:text-white transition-colors" />
-                  <span>AI Portal</span>
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {activeChatDoc && (
-        <div 
-          className={`fixed top-0 right-0 h-full bg-white dark:bg-zinc-900 shadow-2xl border-l border-zinc-200 dark:border-zinc-800 z-50 flex flex-col transition-all duration-300 ${
-            isSidebarExpanded ? "w-full" : "w-120"
-          }`}
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
+          Workspace Documents ({documents.length})
+        </h3>
+        <button 
+          onClick={handleManualRefreshTrigger}
+          className="p-1 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-500 hover:text-zinc-700 cursor-pointer transition-all"
         >
-          <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/50">
-            <div className="min-w-0">
-              <span className="text-[10px] uppercase font-bold text-blue-600 dark:text-blue-400 tracking-wider">Contextual AI Assistant</span>
-              <h3 className="font-bold text-zinc-900 dark:text-white truncate text-sm mt-0.5">{activeChatDoc.originalFileName}</h3>
-            </div>
-            
-            <div className="flex items-center gap-1 shrink-0">
-              <button 
-                onClick={() => setIsSidebarExpanded(!isSidebarExpanded)}
-                className="p-2 text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition-colors"
-                title={isSidebarExpanded ? "Exit Fullscreen" : "Maximize view"}
-              >
-                {isSidebarExpanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-              </button>
-              <button 
-                onClick={closeAiChat}
-                className="p-2 text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition-colors"
-              >
-                <X size={16} />
-              </button>
-            </div>
-          </div>
+          <RefreshCw size={12} />
+        </button>
+      </div>
 
-          <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-zinc-50/30 dark:bg-zinc-950/20">
-            {chatHistory.map((msg, i) => (
-              <div key={i} className={`flex ${msg.sender === "user" ? "justify-end" : "justify-start"}`}>
-                <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
-                  msg.sender === "user" 
-                    ? "bg-blue-600 text-white rounded-tr-none shadow-sm" 
-                    : "bg-white dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200 border border-zinc-200/80 dark:border-zinc-700 rounded-tl-none shadow-xs"
-                }`}>
-                  {msg.text}
-                </div>
-              </div>
-            ))}
-            {isAiThinking && (
-              <div className="flex justify-start">
-                <div className="bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-2xl rounded-tl-none px-4 py-3 text-sm text-zinc-400 dark:text-zinc-500 flex items-center gap-2 shadow-xs">
-                  <Loader2 className="animate-spin h-3.5 w-3.5 text-blue-600" />
-                  <span>Reading vector space models...</span>
-                </div>
-              </div>
+      <div className="overflow-x-auto rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-xs">
+        <table className="w-full text-left border-collapse text-sm">
+          <thead>
+            <tr className="bg-zinc-50 dark:bg-zinc-800/50 border-b border-zinc-200 dark:border-zinc-800 font-semibold text-zinc-500 dark:text-zinc-400 uppercase text-xs tracking-wider">
+              <th className="p-4">File Parameters</th>
+              <th className="p-4 hidden sm:table-cell">Extension Info</th>
+              <th className="p-4 text-right">System Triggers</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800 text-zinc-700 dark:text-zinc-300">
+            {documents.length === 0 ? (
+              <tr>
+                <td colSpan={3} className="p-8 text-center text-zinc-400 dark:text-zinc-500 text-xs font-medium">
+                  No documents found inside this workspace index. Click upload above to add files.
+                </td>
+              </tr>
+            ) : (
+              documents.map((doc) => (
+                <tr key={doc.documentUuid} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-800/20 transition">
+                  <td className="p-4 font-medium max-w-xs truncate text-zinc-900 dark:text-white flex items-center gap-2">
+                    <FileText size={16} className="text-zinc-400 shrink-0" />
+                    <span className="truncate">{doc.originalFileName}</span>
+                  </td>
+                  <td className="p-4 hidden sm:table-cell text-xs font-mono text-zinc-400">{doc.contentType}</td>
+                  <td className="p-4 text-right">
+                    <div className="flex items-center justify-end gap-1.5">
+                      <button
+                        onClick={() => setActivePreviewDoc(doc)}
+                        className="p-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer transition text-zinc-600 dark:text-zinc-300"
+                        title="Preview Inline Panel"
+                      >
+                        <Eye size={14} />
+                      </button>
+
+                      <button
+                        onClick={() => executeSecureDownloadAction(doc)}
+                        disabled={downloadingUuid === doc.documentUuid}
+                        className="p-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer transition text-zinc-600 dark:text-zinc-300 disabled:opacity-40"
+                        title="Save binary down to system root"
+                      >
+                        {downloadingUuid === doc.documentUuid ? (
+                          <Loader2 size={14} className="animate-spin text-blue-600" />
+                        ) : (
+                          <Download size={14} />
+                        )}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))
             )}
-          </div>
+          </tbody>
+        </table>
+      </div>
 
-          <form onSubmit={handleSendQuery} className="p-4 border-t border-zinc-100 dark:border-zinc-800 bg-white dark:bg-zinc-900">
-            <div className="flex items-center gap-2 rounded-xl border border-zinc-200 dark:border-zinc-700 px-3 py-2 bg-zinc-50 dark:bg-zinc-800/50 focus-within:border-blue-500 focus-within:bg-white dark:focus-within:bg-zinc-900 focus-within:ring-2 focus-within:ring-blue-50/50 transition-all">
-              <input
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                placeholder="Ask anything about this document context..."
-                className="w-full bg-transparent text-sm text-zinc-800 dark:text-zinc-200 outline-none placeholder-zinc-400 dark:placeholder-zinc-500"
-              />
-              <button 
-                type="submit" 
-                disabled={!chatInput.trim() || isAiThinking}
-                className="p-1.5 bg-zinc-900 dark:bg-zinc-700 hover:bg-blue-600 dark:hover:bg-blue-600 disabled:opacity-40 text-white rounded-lg transition-all shrink-0 shadow-sm"
-              >
-                <Send size={14} />
-              </button>
-            </div>
-          </form>
-        </div>
+      {activePreviewDoc && (
+        <DocumentViewerModal
+          documentUuid={activePreviewDoc.documentUuid}
+          fileName={activePreviewDoc.originalFileName}
+          contentType={activePreviewDoc.contentType}
+          onClose={() => setActivePreviewDoc(null)}
+        />
       )}
-    </section>
+    </div>
   );
 }
