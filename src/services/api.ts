@@ -81,6 +81,18 @@ export interface DashboardResponse {
   totalDocuments: number;
 }
 
+export interface UserProfileResponse {
+  userUuid: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  role: string;
+  active: boolean;
+  emailVerified: boolean;
+  lastLoginAt: string;
+  createdAt: string;
+}
+
 // --- CORE LIFECYCLE BACKGROUND CONTROLLERS ---
 
 let isRefreshingTokens = false;
@@ -380,6 +392,66 @@ export const api = {
     });
 
     if (!res.ok) throw new Error("Server rejected workspace configuration rename request.");
+    const json = await res.json();
+    return json.data;
+  },
+
+  // Append these inside your existing "export const api = { ... }" declaration block
+
+  deleteDocument: async (documentUuid: string): Promise<void> => {
+    const res = await secureFetch(`${BASE_URL}/documents/${documentUuid}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" }
+    });
+    if (!res.ok) throw new Error("Server rejected document deletion request.");
+  },
+
+  getDeletedDocuments: async (page = 0, size = 50): Promise<{ content: DocumentSummaryResponse[] }> => {
+    const res = await secureFetch(`${BASE_URL}/documents/deleted?page=${page}&size=${size}`, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" }
+    });
+    if (!res.ok) throw new Error("Could not pull soft-deleted trash documents collection.");
+    return await res.json();
+  },
+
+  // Append these functions right inside your existing "export const api = { ... }" block
+
+  renameDocument: async (documentUuid: string, newName: string): Promise<DocumentSummaryResponse> => {
+    const res = await secureFetch(`${BASE_URL}/documents/${documentUuid}/rename`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: newName.trim() }),
+    });
+    if (!res.ok) throw new Error("Server rejected the request to rename this document.");
+    const json = await res.json();
+    return json.data;
+  },
+
+  restoreDocument: async (documentUuid: string): Promise<DocumentSummaryResponse> => {
+    const res = await secureFetch(`${BASE_URL}/documents/${documentUuid}/restore`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" }
+    });
+    if (!res.ok) throw new Error("Could not execute document restoration sequence.");
+    const json = await res.json();
+    return json.data;
+  },
+
+  permanentDeleteDocument: async (documentUuid: string): Promise<void> => {
+    const res = await secureFetch(`${BASE_URL}/documents/${documentUuid}/permanent`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" }
+    });
+    if (!res.ok) throw new Error("Server rejected permanent deletion request allocation.");
+  },
+
+  getCurrentUser: async (): Promise<UserProfileResponse> => {
+    const res = await secureFetch(`${BASE_URL}/users/me`, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" }
+    });
+    if (!res.ok) throw new Error("Could not pull authenticated user profile session context.");
     const json = await res.json();
     return json.data;
   },
