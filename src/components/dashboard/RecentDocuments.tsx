@@ -2,8 +2,9 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import DocumentViewerModal from "./DocumentViewerModal";
-import { secureFetch, api, BASE_URL, DocumentSummaryResponse } from "@/services/api";
 import { Eye, Download, Loader2, FileText, RefreshCw, Edit2, Check, Trash2, X } from "lucide-react";
+import { documentApi, DocumentSummaryResponse, secureFetch, workspaceApi } from "@/lib/api";
+import { BASE_URL } from "@/lib/api/endpoints";
 
 interface RecentDocumentsProps {
   currentWorkspaceUuid: string;
@@ -25,7 +26,7 @@ export default function RecentDocuments({ currentWorkspaceUuid }: RecentDocument
     if (shouldToggleLoader) setLoading(true);
     
     try {
-      const res = await api.getWorkspaceDocuments(currentWorkspaceUuid, 0, 50, true);
+      const res = await workspaceApi.getWorkspaceDocuments(currentWorkspaceUuid, 0, 50, true);
       setDocuments(res.content || []);
     } catch (err) {
       console.error("Failed to gather files for space:", err);
@@ -49,7 +50,7 @@ export default function RecentDocuments({ currentWorkspaceUuid }: RecentDocument
     if (!renameValue.trim() || processingUuid) return;
     setProcessingUuid(docUuid);
     try {
-      const updated = await api.renameDocument(docUuid, renameValue.trim());
+      const updated = await documentApi.renameDocument(docUuid, renameValue.trim());
       setDocuments((prev) =>
         prev.map((doc) => (doc.documentUuid === docUuid ? { ...doc, originalFileName: updated.originalFileName } : doc))
       );
@@ -64,7 +65,7 @@ export default function RecentDocuments({ currentWorkspaceUuid }: RecentDocument
   const handleSoftDeleteExecute = async (docUuid: string) => {
     setProcessingUuid(docUuid);
     try {
-      await api.deleteDocument(docUuid); // Calls DELETE /api/v1/documents/{uuid}
+      await documentApi.deleteDocument(docUuid); // Calls DELETE /api/v1/documents/{uuid}
       setDocuments((prev) => prev.filter((doc) => doc.documentUuid !== docUuid));
       setConfirmDeleteUuid(null);
     } catch (err) {

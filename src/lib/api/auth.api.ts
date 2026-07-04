@@ -109,6 +109,30 @@ class AuthApi {
     }
     return localStorage.getItem("refresh_token");
   }
+
+  /**
+   * PRODUCTION FIX: Bridge method to expose direct silent token rotation
+   * to background lifecycle triggers without circular dependency traps.
+   */
+  async executeDirectSilentTokenRefresh(): Promise<AuthResponse> {
+    // Relying on the client's internal refresh promise to handle token rotation seamlessly
+    await apiClient.refreshToken();
+    
+    // Return the newly cached tokens from localStorage to fulfill the contract safely
+    return {
+      accessToken: localStorage.getItem("access_token") || "",
+      refreshToken: localStorage.getItem("refresh_token") || "",
+      accessTokenExpiresAt: localStorage.getItem("access_token_expires_at") || "",
+      refreshTokenExpiresAt: "",
+      accessTokenExpiresIn: 0,
+      refreshTokenExpiresIn: 0,
+      userUuid: "",
+      firstName: "",
+      lastName: "",
+      email: "",
+      role: ""
+    };
+  }
 }
 
 export const authApi = new AuthApi();

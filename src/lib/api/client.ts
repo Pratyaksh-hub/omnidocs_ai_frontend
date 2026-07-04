@@ -48,7 +48,7 @@ class ApiClient {
     window.location.href = "/auth";
   }
 
-  private async refreshToken() {
+  public async refreshToken() {
     if (this.refreshPromise) {
       return this.refreshPromise;
     }
