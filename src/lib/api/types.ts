@@ -97,6 +97,18 @@ export interface UserProfileResponse {
   createdAt: string;
 }
 
+export interface UserProfileResponse {
+  userUuid: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  role: string;
+  active: boolean;
+  emailVerified: boolean;
+  lastLoginAt: string;
+  createdAt: string;
+}
+
 /* ============================================================
  * Dashboard
  * ============================================================
@@ -142,20 +154,24 @@ export interface RenameWorkspaceRequest {
 
 export interface DocumentSummary {
   documentUuid: string;
-
   originalFileName: string;
-
   contentType: string;
-
   fileSize: number;
-
   status: string;
-
   createdAt: string;
 }
 
 export interface RenameDocumentRequest {
   name: string;
+}
+
+export interface DocumentSummaryResponse {
+  documentUuid: string;
+  originalFileName: string;
+  contentType: string;
+  fileSize: number;
+  status: string;
+  createdAt: string;
 }
 
 /* ============================================================

@@ -1,7 +1,7 @@
 "use client";
 
+import { authApi, userApi, UserProfileResponse } from "@/lib/api";
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from "react";
-import { api, authApi, UserProfileResponse } from "@/services/api";
 
 interface AuthContextType {
   user: UserProfileResponse | null;
@@ -92,7 +92,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     isFetchingRef.current = true;
 
     try {
-      const data = await api.getCurrentUser();
+      const data = await userApi.getCurrentUser();
       setUser(data);
       isHydratedRef.current = true;
       scheduleBackgroundRefresh();

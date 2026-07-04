@@ -145,7 +145,7 @@ export default function WorkspacesPage() {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [triggerNotification]);
 
   const handleManualRefresh = () => {
     setIsRefreshing(true);
