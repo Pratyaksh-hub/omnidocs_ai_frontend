@@ -2,8 +2,8 @@
 
 import React, { useState } from "react";
 import { useRouter } from "next/navigation";
-import { authApi } from "@/services/api";
 import { Loader2, ShieldAlert, Eye, EyeOff, Lock, Mail, User, ShieldCheck, CheckCircle2 } from "lucide-react";
+import { authApi } from "@/lib/api";
 
 export default function AuthenticationPage() {
   const router = useRouter();

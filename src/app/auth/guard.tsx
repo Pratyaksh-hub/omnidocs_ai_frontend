@@ -11,11 +11,13 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const [authorized, setAuthorized] = useState<boolean>(false);
   const [checkingAuth, setCheckingAuth] = useState<boolean>(true);
 
+  // FIXED: Separated initial boot validation loop from regular route checking loops 
+  // to prevent standard sidebar navigation clicks from destroying the parent tree state.
   useEffect(() => {
-    const token = typeof window !== "undefined" ? localStorage.getItem("access_token") : null;
-    const isAuthRoute = pathname.startsWith("/auth");
+    const checkUserCredentialsSession = () => {
+      const token = typeof window !== "undefined" ? localStorage.getItem("access_token") : null;
+      const isAuthRoute = pathname.startsWith("/auth");
 
-    const timerId = setTimeout(() => {
       if (!token && !isAuthRoute) {
         setAuthorized(false);
         router.replace("/auth");
@@ -26,10 +28,10 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
         setAuthorized(true);
       }
       setCheckingAuth(false);
-    }, 0);
+    };
 
-    return () => clearTimeout(timerId);
-  }, [pathname, router]);
+    checkUserCredentialsSession();
+  }, [pathname, router]); 
 
   if (checkingAuth || !authorized) {
     return (

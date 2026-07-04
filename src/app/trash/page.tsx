@@ -3,7 +3,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import AppLayout from "@/components/layout/AppLayout";
 import AlertBanner from "@/components/shared/AlertBanner";
-import { api, DocumentSummaryResponse } from "@/services/api";
+// import { api, DocumentSummaryResponse } from "@/services/api";
+import { documentApi, DocumentSummaryResponse } from "@/lib/api";
 import { Trash2, Loader2, RefreshCw, Undo2, AlertCircle, FileText, Folder, Check, X } from "lucide-react";
 
 export default function TrashPage() {
@@ -50,7 +51,7 @@ export default function TrashPage() {
 
   const fetchGlobalTrash = useCallback(async (forceRefresh = false) => {
     try {
-      const paginatedTrash = await api.getTrashDocuments(0, 100, forceRefresh);
+      const paginatedTrash = await documentApi.getDeletedDocuments(0, 100, forceRefresh);
       setTrashDocs(paginatedTrash.content || []);
     } catch (err) {
       console.error("Failed to cleanly sync global trash bin metrics:", err);
@@ -62,6 +63,7 @@ export default function TrashPage() {
     }
   }, [triggerNotification]);
 
+  // FIXED: Detached triggerNotification dependency token to isolate mounting loops
   useEffect(() => {
     let isMounted = true;
     
@@ -77,13 +79,14 @@ export default function TrashPage() {
       if (autoDismissTimeoutRef.current) clearTimeout(autoDismissTimeoutRef.current);
       if (fadeOutTimeoutRef.current) clearTimeout(fadeOutTimeoutRef.current);
     };
-  }, [fetchGlobalTrash]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleRestore = async (uuid: string, name: string) => {
     setActioningId(uuid);
     setConfirmPurgeUuid(null);
     try {
-      await api.restoreDocument(uuid);
+      await documentApi.restoreDocument(uuid);
       setTrashDocs((prev) => prev.filter((doc) => {
         const docId = doc.documentUuid || (doc as unknown as Record<string, unknown>).uuid;
         return docId !== uuid;
@@ -99,7 +102,7 @@ export default function TrashPage() {
   const handlePermanentDelete = async (uuid: string, name: string) => {
     setActioningId(uuid);
     try {
-      await api.permanentDeleteDocument(uuid);
+      await documentApi.permanentDeleteDocument(uuid);
       setTrashDocs((prev) => prev.filter((doc) => {
         const docId = doc.documentUuid || (doc as unknown as Record<string, unknown>).uuid;
         return docId !== uuid;

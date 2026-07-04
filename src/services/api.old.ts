@@ -156,6 +156,18 @@ export interface SecurityPoolItem {
   createdAt: string;
 }
 
+// --- PRODUCTION GRADE UNIFIED CACHE & IN-FLIGHT TRACKER LAYER ---
+// A clean, strongly typed store decoupled completely from React lifecycles.
+const apiCacheStore = {
+  dashboard: null as DashboardResponse | null,
+  userProfile: null as UserProfileResponse | null,
+  workspaces: null as WorkspaceResponse[] | null,
+  trash: null as PaginatedResponse<DocumentSummaryResponse> | null,
+};
+
+// Global in-flight dictionary guarantees that no duplicate request handles can co-exist at the same time.
+const activePromisesMap = new Map<string, Promise<unknown>>();
+
 // --- CORE LIFECYCLE BACKGROUND CONTROLLERS ---
 
 let isRefreshingTokens = false;
@@ -172,6 +184,14 @@ const handleForcedSessionLogout = () => {
   localStorage.removeItem("access_token");
   localStorage.removeItem("refresh_token");
   localStorage.removeItem("access_token_expires_at");
+  
+  // Wipe all module store memory allocations on session expiration
+  apiCacheStore.dashboard = null;
+  apiCacheStore.userProfile = null;
+  apiCacheStore.workspaces = null;
+  apiCacheStore.trash = null;
+  activePromisesMap.clear();
+
   if (typeof window !== "undefined") {
     window.location.href = "/auth";
   }
@@ -226,6 +246,11 @@ export const secureFetch = async (url: string, options: RequestInit = {}): Promi
   if (response.status === 401) {
     if (typeof window === "undefined") return response;
     
+    if (url.includes("/users/me")) {
+      handleForcedSessionLogout();
+      return response;
+    }
+
     const storedRefreshKey = localStorage.getItem("refresh_token");
     if (!storedRefreshKey) {
       handleForcedSessionLogout();
@@ -323,6 +348,19 @@ export const authApi = {
     localStorage.setItem("refresh_token", authData.refreshToken);
     localStorage.setItem("access_token_expires_at", authData.accessTokenExpiresAt);
     
+    // Explicitly pre-populate core profile layout memory values to intercept layout mounts post-redirect
+    apiCacheStore.userProfile = {
+      userUuid: authData.userUuid,
+      firstName: authData.firstName,
+      lastName: authData.lastName,
+      email: authData.email,
+      role: authData.role,
+      active: true,
+      emailVerified: true,
+      lastLoginAt: new Date().toISOString(),
+      createdAt: new Date().toISOString()
+    };
+    
     setTimeout(() => proactiveTokenRefreshTrigger(), 0);
     
     return authData;
@@ -348,6 +386,13 @@ export const authApi = {
       localStorage.removeItem("access_token");
       localStorage.removeItem("refresh_token");
       localStorage.removeItem("access_token_expires_at");
+      
+      // Clean memory traces completely
+      apiCacheStore.dashboard = null;
+      apiCacheStore.userProfile = null;
+      apiCacheStore.workspaces = null;
+      apiCacheStore.trash = null;
+      activePromisesMap.clear();
     }
   },
   
@@ -374,19 +419,38 @@ export const authApi = {
 
 export const api = {
   getAllWorkspaces: async (page = 0, size = 20, nocache = false): Promise<WorkspaceResponse[]> => {
-    let url = `${BASE_URL}/workspaces?page=${page}&size=${size}&sort=createdAt,desc`;
-    if (nocache) url += `&_t=${Date.now()}`;
+    const trackingKey = `workspaces-p${page}-s${size}`;
+    
+    if (nocache) {
+      apiCacheStore.workspaces = null;
+      activePromisesMap.delete(trackingKey);
+    }
 
-    const res = await secureFetch(url, {
+    if (apiCacheStore.workspaces) {
+      return apiCacheStore.workspaces;
+    }
+
+    if (activePromisesMap.has(trackingKey)) {
+      return activePromisesMap.get(trackingKey)! as Promise<WorkspaceResponse[]>;
+    }
+
+    const spacesPromise = secureFetch(`${BASE_URL}/workspaces?page=${page}&size=${size}&sort=createdAt,desc`, {
       method: "GET",
-      headers: { 
-        "Content-Type": "application/json",
-        "Cache-Control": "no-cache, no-store, must-revalidate",
-        "Pragma": "no-cache"
-      }
-    });
-    const json = await res.json();
-    return json.data?.content || [];
+      headers: { "Content-Type": "application/json" }
+    })
+      .then(async (res) => {
+        const json = await res.json();
+        const content = json.data?.content || [];
+        apiCacheStore.workspaces = content;
+        return content;
+      })
+      .catch((err) => {
+        activePromisesMap.delete(trackingKey);
+        throw err;
+      });
+
+    activePromisesMap.set(trackingKey, spacesPromise);
+    return spacesPromise;
   },
 
   createWorkspace: async (request: CreateWorkspaceRequest): Promise<WorkspaceResponse> => {
@@ -396,22 +460,35 @@ export const api = {
       body: JSON.stringify(request),
     });
     const json = await res.json();
+    apiCacheStore.workspaces = null; // Clear spaces memory cache array to trigger fresh pull on reload
     return json.data;
   },
 
   getWorkspaceDocuments: async (workspaceUuid: string, page = 0, size = 20, nocache = false): Promise<PaginatedResponse<DocumentSummaryResponse>> => {
-    let url = `${BASE_URL}/workspaces/${workspaceUuid}/documents?page=${page}&size=${size}`;
-    if (nocache) url += `&_t=${Date.now()}`;
+    const trackingKey = `docs-${workspaceUuid}-p${page}-s${size}`;
 
-    const res = await secureFetch(url, {
-      method: "GET",
-      headers: {
-        "Cache-Control": "no-cache, no-store, must-revalidate",
-        "Pragma": "no-cache"
-      }
-    });
-    const json = await res.json();
-    return json.data || { content: [], page: 0, size: size, totalElements: 0, totalPages: 0, last: true };
+    if (nocache) {
+      activePromisesMap.delete(trackingKey);
+    }
+
+    if (activePromisesMap.has(trackingKey)) {
+      return activePromisesMap.get(trackingKey)! as Promise<PaginatedResponse<DocumentSummaryResponse>>;
+    }
+
+    const docsPromise: Promise<PaginatedResponse<DocumentSummaryResponse>> = secureFetch(`${BASE_URL}/workspaces/${workspaceUuid}/documents?page=${page}&size=${size}`, {
+      method: "GET"
+    })
+      .then(async (res) => {
+        const json = await res.json();
+        return json.data || { content: [], page: 0, size: size, totalElements: 0, totalPages: 0, last: true };
+      })
+      .catch((err) => {
+        activePromisesMap.delete(trackingKey);
+        throw err;
+      });
+
+    activePromisesMap.set(trackingKey, docsPromise);
+    return docsPromise;
   },
 
   uploadDocument: async (workspaceUuid: string, file: File): Promise<unknown> => {
@@ -423,6 +500,7 @@ export const api = {
       method: "POST",
       body: formData,
     });
+    apiCacheStore.dashboard = null; // Reset metrics context 
     return res.json();
   },
 
@@ -434,34 +512,75 @@ export const api = {
   },
 
   getTrashDocuments: async (page = 0, size = 50, nocache = false): Promise<PaginatedResponse<DocumentSummaryResponse>> => {
-    let url = `${BASE_URL}/documents/deleted?page=${page}&size=${size}`;
-    if (nocache) url += `&_t=${Date.now()}`;
+    const trackingKey = `trash-p${page}-s${size}`;
 
-    const res = await secureFetch(url, {
-      method: "GET",
-      headers: {
-        "Cache-Control": "no-cache, no-store, must-revalidate",
-        "Pragma": "no-cache"
-      }
-    });
-    const json = await res.json();
-    return json.data || { content: [], page: 0, size: size, totalElements: 0, totalPages: 0, last: true };
+    if (nocache) {
+      apiCacheStore.trash = null;
+      activePromisesMap.delete(trackingKey);
+    }
+
+    if (apiCacheStore.trash) {
+      return apiCacheStore.trash;
+    }
+
+    if (activePromisesMap.has(trackingKey)) {
+      return activePromisesMap.get(trackingKey)! as Promise<PaginatedResponse<DocumentSummaryResponse>>;
+    }
+
+    const trashPromise = secureFetch(`${BASE_URL}/documents/deleted?page=${page}&size=${size}`, {
+      method: "GET"
+    })
+      .then(async (res) => {
+        const json = await res.json() as { data?: PaginatedResponse<DocumentSummaryResponse> };
+        const payload: PaginatedResponse<DocumentSummaryResponse> = json.data || { content: [], page: 0, size: size, totalElements: 0, totalPages: 0, last: true };
+        apiCacheStore.trash = payload;
+        return payload;
+      })
+      .catch((err) => {
+        activePromisesMap.delete(trackingKey);
+        throw err;
+      });
+
+    activePromisesMap.set(trackingKey, trashPromise);
+    return trashPromise;
   },
 
   getDashboardMetrics: async (nocache = false): Promise<DashboardResponse> => {
-    let url = `${BASE_URL}/dashboard`;
-    if (nocache) url += `?_t=${Date.now()}`;
+    const trackingKey = "dashboard-metrics";
 
-    const res = await secureFetch(url, {
+    if (nocache) {
+      apiCacheStore.dashboard = null;
+      activePromisesMap.delete(trackingKey);
+    }
+
+    // 1. Return persistent static mirror values if available
+    if (apiCacheStore.dashboard) {
+      return apiCacheStore.dashboard;
+    }
+
+    // 2. Return active transaction promise if multiple mounting threads hit concurrently
+    if (activePromisesMap.has(trackingKey)) {
+      return activePromisesMap.get(trackingKey)! as Promise<DashboardResponse>;
+    }
+
+    const dashboardPromise = secureFetch(`${BASE_URL}/dashboard`, {
       method: "GET",
-      headers: {
-        "Content-Type": "application/json",
-        "Cache-Control": "no-cache, no-store, must-revalidate"
-      }
-    });
+      headers: { "Content-Type": "application/json" }
+    })
+      .then(async (res) => {
+        const json = await res.json();
+        const baseMetrics: DashboardResponse = json.data || { totalWorkspaces: 0, totalDocuments: 0 };
+        apiCacheStore.dashboard = baseMetrics;
+        return baseMetrics;
+      })
+      .catch(() => {
+        // Safe rejection cleanup layer removes the promise key on failure strings
+        activePromisesMap.delete(trackingKey);
+        return apiCacheStore.dashboard || { totalWorkspaces: 0, totalDocuments: 0 };
+      });
 
-    const json = await res.json();
-    return json.data || { totalWorkspaces: 0, totalDocuments: 0 };
+    activePromisesMap.set(trackingKey, dashboardPromise);
+    return dashboardPromise;
   },
 
   renameWorkspace: async (workspaceUuid: string, newName: string): Promise<WorkspaceResponse> => {
@@ -470,8 +589,8 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: newName.trim() }),
     });
-
     const json = await res.json();
+    apiCacheStore.workspaces = null; 
     return json.data;
   },
 
@@ -480,6 +599,8 @@ export const api = {
       method: "DELETE",
       headers: { "Content-Type": "application/json" }
     });
+    apiCacheStore.dashboard = null;
+    apiCacheStore.trash = null;
   },
 
   getDeletedDocuments: async (page = 0, size = 50): Promise<{ content: DocumentSummaryResponse[] }> => {
@@ -506,6 +627,8 @@ export const api = {
       headers: { "Content-Type": "application/json" }
     });
     const json = await res.json();
+    apiCacheStore.dashboard = null;
+    apiCacheStore.trash = null;
     return json.data;
   },
 
@@ -514,15 +637,36 @@ export const api = {
       method: "DELETE",
       headers: { "Content-Type": "application/json" }
     });
+    apiCacheStore.trash = null;
   },
 
   getCurrentUser: async (): Promise<UserProfileResponse> => {
-    const res = await secureFetch(`${BASE_URL}/users/me`, {
+    const trackingKey = "current-user-profile";
+
+    if (apiCacheStore.userProfile) {
+      return apiCacheStore.userProfile;
+    }
+
+    if (activePromisesMap.has(trackingKey)) {
+      return activePromisesMap.get(trackingKey)! as Promise<UserProfileResponse>;
+    }
+
+    const userPromise = secureFetch(`${BASE_URL}/users/me`, {
       method: "GET",
       headers: { "Content-Type": "application/json" }
-    });
-    const json = await res.json();
-    return json.data;
+    })
+      .then(async (res) => {
+        const json = await res.json();
+        apiCacheStore.userProfile = json.data;
+        return json.data;
+      })
+      .catch((err) => {
+        activePromisesMap.delete(trackingKey);
+        throw err;
+      });
+
+    activePromisesMap.set(trackingKey, userPromise);
+    return userPromise;
   },
 
   askWorkspaceAI: async (workspaceUuid: string, question: string): Promise<{ answer: string }> => {
@@ -532,6 +676,6 @@ export const api = {
       body: JSON.stringify({ question: question.trim() }),
     });
     const json = await res.json();
-    return json.data; // Expecting backend structure like: { success: true, data: { answer: "..." } }
+    return json.data;
   },
 };

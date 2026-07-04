@@ -16,6 +16,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<UserProfileResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const activeRefreshTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
+  const isHydratedRef = useRef<boolean>(false);
+  // NEW: Strict Mode Interceptor prevents concurrent dual-flight network triggers
+  const isFetchingRef = useRef<boolean>(false);
 
   const logout = useCallback(async () => {
     if (activeRefreshTimeoutRef.current) {
@@ -27,13 +31,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       console.error("Session cleanup exception:", err);
     } finally {
       setUser(null);
+      isHydratedRef.current = false;
+      isFetchingRef.current = false;
       if (typeof window !== "undefined") {
         window.location.href = "/auth";
       }
     }
   }, []);
 
-  // FIXED: Integrated directly into a singular, clean useCallback block using a named internal executor to support recursive timeout mapping without dependency array pollution.
   const scheduleBackgroundRefresh = useCallback(() => {
     function runHeartbeatLoop() {
       if (typeof window === "undefined") return;
@@ -55,8 +60,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         try {
           console.log("🔄 Background Auth Lifecycle Provider: Syncing session keys...");
           await authApi.executeDirectSilentTokenRefresh();
-          
-          // Safely recurse using the locally bound function signature
           runHeartbeatLoop();
         } catch (err) {
           console.error("Proactive background refresh failed, executing fallback logout:", err);
@@ -76,17 +79,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
+    // Short-circuit 1: Skip if already fully hydrated
+    if (isHydratedRef.current) {
+      return;
+    }
+
+    // Short-circuit 2: If a profile fetch flight is currently active, intercept the second concurrent Strict Mode trigger
+    if (isFetchingRef.current) {
+      return;
+    }
+
+    isFetchingRef.current = true;
+
     try {
       const data = await api.getCurrentUser();
       setUser(data);
+      isHydratedRef.current = true;
       scheduleBackgroundRefresh();
     } catch (err) {
       console.error("Could not rebuild active profile context mapping:", err);
       logout();
     } finally {
       setLoading(false);
+      isFetchingRef.current = false;
     }
-  }, [scheduleBackgroundRefresh, logout]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); 
 
   useEffect(() => {
     let isMounted = true;
