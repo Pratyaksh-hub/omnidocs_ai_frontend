@@ -14,6 +14,58 @@ export const BASE_URL = getSanitizedBaseUrl(RAW_URL);
 
 console.log("OmniDocs Engine Hooked To API Channel:", BASE_URL);
 
+// --- CENTRALIZED ERROR & RESPONSE INTERCEPTION UTILITY ---
+
+export interface BackendErrorPayload {
+  success: boolean;
+  data: null;
+  error?: {
+    timestamp?: string;
+    status?: number;
+    error?: string;
+    code?: string | null;
+    message?: string;
+    path?: string;
+  };
+}
+
+/**
+ * Extracts exact structured backend error messages or formats network transport anomalies.
+ */
+export async function handleCentralizedError(errorContext: unknown): Promise<Error> {
+  if (errorContext instanceof Response) {
+    if (errorContext.status === 404) {
+      return new Error("404 Not Found: The authentication target endpoint could not be found on the remote server cluster.");
+    }
+    if (errorContext.status === 401 || errorContext.status === 403) {
+      return new Error(`${errorContext.status} Unauthorized: Access denied by security compliance filters.`);
+    }
+
+    try {
+      const responseJson = await errorContext.clone().json() as BackendErrorPayload;
+      if (responseJson?.error?.message) {
+        return new Error(responseJson.error.message);
+      }
+      if (responseJson?.error?.error) {
+        return new Error(responseJson.error.error);
+      }
+    } catch {
+      // Stream is not valid JSON or text body fallback
+    }
+    return new Error(`HTTP Error ${errorContext.status}: An error occurred while communicating with the engine endpoint.`);
+  }
+
+  if (errorContext instanceof Error) {
+    const msg = errorContext.message.toLowerCase();
+    if (msg.includes("failed to fetch") || msg.includes("network error")) {
+      return new Error("CORS Policy or Network Failure: Connection blocked by cross-origin security resource filters.");
+    }
+    return errorContext;
+  }
+
+  return new Error("Something went wrong. Please check your data or network connection.");
+}
+
 // --- TYPE INTERFACES ---
 
 export interface CreateWorkspaceRequest {
@@ -54,10 +106,10 @@ export interface AuthResponse {
   lastName: string;
   userUuid: string;
   role: string;
-  accessTokenExpiresAt: string;  // ISO Instant string from Spring Boot (e.g., "2026-07-04T03:15:00Z")
-  refreshTokenExpiresAt: string; // ISO Instant string
-  accessTokenExpiresIn: number;  // Duration in milliseconds (e.g., 900000)
-  refreshTokenExpiresIn: number; // Duration in milliseconds
+  accessTokenExpiresAt: string;
+  refreshTokenExpiresAt: string;
+  accessTokenExpiresIn: number;
+  refreshTokenExpiresIn: number;
 }
 
 export interface SignupRequest {
@@ -107,7 +159,6 @@ export interface SecurityPoolItem {
 // --- CORE LIFECYCLE BACKGROUND CONTROLLERS ---
 
 let isRefreshingTokens = false;
-// FIXED: Explicitly typed array structure to eliminate the unexpected 'any' rule failure
 let failedQueueWaiters: ((error: Error | null, token: string | null) => void)[] = [];
 let activeRefreshTimeoutId: NodeJS.Timeout | null = null;
 
@@ -140,7 +191,7 @@ export const proactiveTokenRefreshTrigger = () => {
   const expirationTimeMs = new Date(expiresAtStr).getTime();
   if (isNaN(expirationTimeMs)) return;
 
-  const bufferMs = 60 * 1000; // 1-minute proactive refresh buffer boundary
+  const bufferMs = 60 * 1000;
   const currentTimeMs = Date.now();
   const delayTimeMs = expirationTimeMs - currentTimeMs - bufferMs;
 
@@ -158,7 +209,6 @@ export const proactiveTokenRefreshTrigger = () => {
 
 // --- TRANSPARENT REQUEST INTERCEPTOR FLIGHT LAYER ---
 export const secureFetch = async (url: string, options: RequestInit = {}): Promise<Response> => {
-  // FIXED: Changed 'let' to 'const' as 'token' is never reassigned
   const token = typeof window !== "undefined" ? localStorage.getItem("access_token") : null;
   
   options.headers = {
@@ -166,8 +216,12 @@ export const secureFetch = async (url: string, options: RequestInit = {}): Promi
     ...(token ? { "Authorization": `Bearer ${token}` } : {})
   };
 
-  // FIXED: Changed 'let' to 'const' as 'response' is never reassigned
-  const response = await fetch(url, options);
+  let response: Response;
+  try {
+    response = await fetch(url, options);
+  } catch (networkError) {
+    throw await handleCentralizedError(networkError);
+  }
 
   if (response.status === 401) {
     if (typeof window === "undefined") return response;
@@ -205,6 +259,10 @@ export const secureFetch = async (url: string, options: RequestInit = {}): Promi
     }
   }
 
+  if (!response.ok) {
+    throw await handleCentralizedError(response);
+  }
+
   return response;
 };
 
@@ -223,7 +281,7 @@ export const authApi = {
         body: JSON.stringify({ refreshToken: storedRefreshKey })
       });
 
-      if (!res.ok) throw new Error("Backend rejected refresh token authorization validation rules");
+      if (!res.ok) throw await handleCentralizedError(res);
 
       const json = await res.json();
       const newKeys: AuthResponse = json.data;
@@ -237,20 +295,27 @@ export const authApi = {
       
       return newKeys;
     } catch (err) {
-      processQueueWaiters(err as Error, null);
-      throw err;
+      const formattedError = await handleCentralizedError(err);
+      processQueueWaiters(formattedError, null);
+      throw formattedError;
     } finally {
       isRefreshingTokens = false;
     }
   },
 
   login: async (request: LoginRequest): Promise<AuthResponse> => {
-    const res = await fetch(`${BASE_URL}/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(request),
-    });
-    if (!res.ok) throw new Error("Invalid credentials provided.");
+    let res: Response;
+    try {
+      res = await fetch(`${BASE_URL}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      });
+    } catch (netErr) {
+      throw await handleCentralizedError(netErr);
+    }
+
+    if (!res.ok) throw await handleCentralizedError(res);
     const json = await res.json();
     const authData: AuthResponse = json.data;
 
@@ -287,13 +352,19 @@ export const authApi = {
   },
   
   signup: async (request: SignupRequest): Promise<AuthResponse> => {
-    const res = await fetch(`${BASE_URL}/auth/signup`, {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(request),
-    });
-    if (!res.ok) throw new Error("Signup workflow rejected.");
+    let res: Response;
+    try {
+      res = await fetch(`${BASE_URL}/auth/signup`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      });
+    } catch (netErr) {
+      throw await handleCentralizedError(netErr);
+    }
+
+    if (!res.ok) throw await handleCentralizedError(res);
     const json = await res.json();
     return json.data || { accessToken: "", refreshToken: "", email: request.email };
   },
@@ -389,12 +460,9 @@ export const api = {
       }
     });
 
-    if (!res.ok) throw new Error(`System metrics channel sync failed with status: ${res.status}`);
     const json = await res.json();
     return json.data || { totalWorkspaces: 0, totalDocuments: 0 };
   },
-
-  // Add this right inside your existing "export const api = { ... }" declaration block
 
   renameWorkspace: async (workspaceUuid: string, newName: string): Promise<WorkspaceResponse> => {
     const res = await secureFetch(`${BASE_URL}/workspaces/${workspaceUuid}/rename`, {
@@ -403,19 +471,15 @@ export const api = {
       body: JSON.stringify({ name: newName.trim() }),
     });
 
-    if (!res.ok) throw new Error("Server rejected workspace configuration rename request.");
     const json = await res.json();
     return json.data;
   },
 
-  // Append these inside your existing "export const api = { ... }" declaration block
-
   deleteDocument: async (documentUuid: string): Promise<void> => {
-    const res = await secureFetch(`${BASE_URL}/documents/${documentUuid}`, {
+    await secureFetch(`${BASE_URL}/documents/${documentUuid}`, {
       method: "DELETE",
       headers: { "Content-Type": "application/json" }
     });
-    if (!res.ok) throw new Error("Server rejected document deletion request.");
   },
 
   getDeletedDocuments: async (page = 0, size = 50): Promise<{ content: DocumentSummaryResponse[] }> => {
@@ -423,11 +487,8 @@ export const api = {
       method: "GET",
       headers: { "Content-Type": "application/json" }
     });
-    if (!res.ok) throw new Error("Could not pull soft-deleted trash documents collection.");
     return await res.json();
   },
-
-  // Append these functions right inside your existing "export const api = { ... }" block
 
   renameDocument: async (documentUuid: string, newName: string): Promise<DocumentSummaryResponse> => {
     const res = await secureFetch(`${BASE_URL}/documents/${documentUuid}/rename`, {
@@ -435,7 +496,6 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: newName.trim() }),
     });
-    if (!res.ok) throw new Error("Server rejected the request to rename this document.");
     const json = await res.json();
     return json.data;
   },
@@ -445,17 +505,15 @@ export const api = {
       method: "POST",
       headers: { "Content-Type": "application/json" }
     });
-    if (!res.ok) throw new Error("Could not execute document restoration sequence.");
     const json = await res.json();
     return json.data;
   },
 
   permanentDeleteDocument: async (documentUuid: string): Promise<void> => {
-    const res = await secureFetch(`${BASE_URL}/documents/${documentUuid}/permanent`, {
+    await secureFetch(`${BASE_URL}/documents/${documentUuid}/permanent`, {
       method: "DELETE",
       headers: { "Content-Type": "application/json" }
     });
-    if (!res.ok) throw new Error("Server rejected permanent deletion request allocation.");
   },
 
   getCurrentUser: async (): Promise<UserProfileResponse> => {
@@ -463,8 +521,17 @@ export const api = {
       method: "GET",
       headers: { "Content-Type": "application/json" }
     });
-    if (!res.ok) throw new Error("Could not pull authenticated user profile session context.");
     const json = await res.json();
     return json.data;
+  },
+
+  askWorkspaceAI: async (workspaceUuid: string, question: string): Promise<{ answer: string }> => {
+    const res = await secureFetch(`${BASE_URL}/ai/workspaces/${workspaceUuid}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: question.trim() }),
+    });
+    const json = await res.json();
+    return json.data; // Expecting backend structure like: { success: true, data: { answer: "..." } }
   },
 };

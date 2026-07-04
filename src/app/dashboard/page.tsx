@@ -74,7 +74,7 @@ export default function DashboardPage() {
               </button>
             </div>
             <p className="mt-1.5 text-zinc-500 dark:text-zinc-400 font-medium text-sm">
-              Here is an aggregate live overview of your connected cloud engine.
+              Here is an aggregate live overview of your data.
             </p>
           </div>
           <Link 
@@ -87,7 +87,7 @@ export default function DashboardPage() {
         </div>
 
         <div className="grid gap-6 md:grid-cols-3">
-          <StatsCard title="Total Assigned Documents" value={totalDocuments.toString()} />
+          <StatsCard title="Total Uploaded Documents" value={totalDocuments.toString()} />
           <StatsCard title="Active Workspaces" value={totalWorkspaces.toString()} />
           <StatsCard title="AI Engine Credits" value="1,240" />
         </div>
@@ -95,7 +95,7 @@ export default function DashboardPage() {
         <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-8 shadow-xs transition-colors duration-300">
           <h2 className="text-xl font-bold text-zinc-900 dark:text-white">Getting Started</h2>
           <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400 leading-relaxed max-w-2xl">
-            To view indexed file pools, upload raw PDFs, or trigger contextual vector embeddings via Spring AI, jump over to your dedicated workspaces explorer console.
+            To view indexed file pools, upload raw PDFs, or trigger contextual vector embeddings, jump over to your dedicated workspaces explorer console.
           </p>
           <div className="mt-6">
             <Link 
