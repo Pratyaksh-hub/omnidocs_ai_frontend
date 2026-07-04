@@ -289,6 +289,7 @@ export const authApi = {
   signup: async (request: SignupRequest): Promise<AuthResponse> => {
     const res = await fetch(`${BASE_URL}/auth/signup`, {
       method: "POST",
+      credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(request),
     });
