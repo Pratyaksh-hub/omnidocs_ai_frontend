@@ -3,7 +3,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import AppLayout from "@/components/layout/AppLayout";
 import AlertBanner from "@/components/shared/AlertBanner";
-import { api, DocumentSummaryResponse } from "@/services/api";
+// import { api, DocumentSummaryResponse } from "@/services/api";
+import { documentApi, DocumentSummaryResponse } from "@/lib/api";
 import { Trash2, Loader2, RefreshCw, Undo2, AlertCircle, FileText, Folder, Check, X } from "lucide-react";
 
 export default function TrashPage() {
@@ -48,37 +49,44 @@ export default function TrashPage() {
     }, 10000);
   }, []);
 
-  // FIXED: Wrapped function with useCallback to prevent infinite render loops and satisfy dependencies
   const fetchGlobalTrash = useCallback(async (forceRefresh = false) => {
     try {
-      const paginatedTrash = await api.getTrashDocuments(0, 100, forceRefresh);
+      const paginatedTrash = await documentApi.getDeletedDocuments(0, 100, forceRefresh);
       setTrashDocs(paginatedTrash.content || []);
     } catch (err) {
       console.error("Failed to cleanly sync global trash bin metrics:", err);
-      triggerNotification(null, err); // FIXED: 'err' variable is now used constructively
+      // Centralized text intercepts passed straight into user alerts
+      triggerNotification(null, err);
     } finally {
       setLoading(false);
       setIsRefreshing(false);
     }
   }, [triggerNotification]);
 
+  // FIXED: Detached triggerNotification dependency token to isolate mounting loops
   useEffect(() => {
+    let isMounted = true;
+    
     const run = async () => {
-      await fetchGlobalTrash(false);
+      if (isMounted) {
+        await fetchGlobalTrash(false);
+      }
     };
     run();
 
     return () => {
+      isMounted = false;
       if (autoDismissTimeoutRef.current) clearTimeout(autoDismissTimeoutRef.current);
       if (fadeOutTimeoutRef.current) clearTimeout(fadeOutTimeoutRef.current);
     };
-  }, [fetchGlobalTrash]); // FIXED: Added missing stable hook dependencies
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleRestore = async (uuid: string, name: string) => {
     setActioningId(uuid);
     setConfirmPurgeUuid(null);
     try {
-      await api.restoreDocument(uuid);
+      await documentApi.restoreDocument(uuid);
       setTrashDocs((prev) => prev.filter((doc) => {
         const docId = doc.documentUuid || (doc as unknown as Record<string, unknown>).uuid;
         return docId !== uuid;
@@ -94,7 +102,7 @@ export default function TrashPage() {
   const handlePermanentDelete = async (uuid: string, name: string) => {
     setActioningId(uuid);
     try {
-      await api.permanentDeleteDocument(uuid);
+      await documentApi.permanentDeleteDocument(uuid);
       setTrashDocs((prev) => prev.filter((doc) => {
         const docId = doc.documentUuid || (doc as unknown as Record<string, unknown>).uuid;
         return docId !== uuid;
@@ -123,7 +131,7 @@ export default function TrashPage() {
     <AppLayout>
       <div className="space-y-6 relative">
         
-        {/* Animated Custom Notification Banner */}
+        {/* Animated Central Notification Banner */}
         <div 
           className={`transition-all duration-1000 ease-in-out ${
             isBannerVisible ? "opacity-100 max-h-40 transform translate-y-0" : "opacity-0 max-h-0 overflow-hidden transform -translate-y-2 pointer-events-none"
@@ -173,7 +181,6 @@ export default function TrashPage() {
         ) : (
           <div className="space-y-3">
             {trashDocs.map((doc) => {
-              // FIXED: Replaced unsafe 'any' assertions with precise unknown type narrowing bridges
               const docId = (doc.documentUuid || (doc as unknown as Record<string, unknown>).uuid) as string;
               const workspaceName = String((doc as unknown as Record<string, unknown>).workspaceName || "Unknown Workspace");
               

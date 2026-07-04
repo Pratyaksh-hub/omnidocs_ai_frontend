@@ -1,8 +1,9 @@
 "use client";
 
 import React, { useEffect, useState, useRef } from "react";
-import { secureFetch, BASE_URL } from "@/services/api";
 import { X, Loader2, Download, AlertTriangle } from "lucide-react";
+import { secureFetch } from "@/lib/api";
+import { BASE_URL } from "@/lib/api/endpoints";
 
 interface DocumentViewerModalProps {
   documentUuid: string;

@@ -57,13 +57,12 @@ export default function SecurityPoolsPage() {
     }
   }, []);
 
-  // FIXED: Runs load operations completely asynchronously to eliminate cascading renders
+  // Safe mounting layer blocks cascading layout lifecycle updates
   useEffect(() => {
     let isMounted = true;
 
     const executeAsyncLoad = async () => {
       if (isMounted) {
-        // Pass false here to let the state initialize in background or task loops safely
         await loadSecurityPools(false);
       }
     };

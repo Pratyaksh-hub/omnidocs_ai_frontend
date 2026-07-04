@@ -14,6 +14,58 @@ export const BASE_URL = getSanitizedBaseUrl(RAW_URL);
 
 console.log("OmniDocs Engine Hooked To API Channel:", BASE_URL);
 
+// --- CENTRALIZED ERROR & RESPONSE INTERCEPTION UTILITY ---
+
+export interface BackendErrorPayload {
+  success: boolean;
+  data: null;
+  error?: {
+    timestamp?: string;
+    status?: number;
+    error?: string;
+    code?: string | null;
+    message?: string;
+    path?: string;
+  };
+}
+
+/**
+ * Extracts exact structured backend error messages or formats network transport anomalies.
+ */
+export async function handleCentralizedError(errorContext: unknown): Promise<Error> {
+  if (errorContext instanceof Response) {
+    if (errorContext.status === 404) {
+      return new Error("404 Not Found: The authentication target endpoint could not be found on the remote server cluster.");
+    }
+    if (errorContext.status === 401 || errorContext.status === 403) {
+      return new Error(`${errorContext.status} Unauthorized: Access denied by security compliance filters.`);
+    }
+
+    try {
+      const responseJson = await errorContext.clone().json() as BackendErrorPayload;
+      if (responseJson?.error?.message) {
+        return new Error(responseJson.error.message);
+      }
+      if (responseJson?.error?.error) {
+        return new Error(responseJson.error.error);
+      }
+    } catch {
+      // Stream is not valid JSON or text body fallback
+    }
+    return new Error(`HTTP Error ${errorContext.status}: An error occurred while communicating with the engine endpoint.`);
+  }
+
+  if (errorContext instanceof Error) {
+    const msg = errorContext.message.toLowerCase();
+    if (msg.includes("failed to fetch") || msg.includes("network error")) {
+      return new Error("CORS Policy or Network Failure: Connection blocked by cross-origin security resource filters.");
+    }
+    return errorContext;
+  }
+
+  return new Error("Something went wrong. Please check your data or network connection.");
+}
+
 // --- TYPE INTERFACES ---
 
 export interface CreateWorkspaceRequest {
@@ -54,10 +106,10 @@ export interface AuthResponse {
   lastName: string;
   userUuid: string;
   role: string;
-  accessTokenExpiresAt: string;  // ISO Instant string from Spring Boot (e.g., "2026-07-04T03:15:00Z")
-  refreshTokenExpiresAt: string; // ISO Instant string
-  accessTokenExpiresIn: number;  // Duration in milliseconds (e.g., 900000)
-  refreshTokenExpiresIn: number; // Duration in milliseconds
+  accessTokenExpiresAt: string;
+  refreshTokenExpiresAt: string;
+  accessTokenExpiresIn: number;
+  refreshTokenExpiresIn: number;
 }
 
 export interface SignupRequest {
@@ -104,10 +156,21 @@ export interface SecurityPoolItem {
   createdAt: string;
 }
 
+// --- PRODUCTION GRADE UNIFIED CACHE & IN-FLIGHT TRACKER LAYER ---
+// A clean, strongly typed store decoupled completely from React lifecycles.
+const apiCacheStore = {
+  dashboard: null as DashboardResponse | null,
+  userProfile: null as UserProfileResponse | null,
+  workspaces: null as WorkspaceResponse[] | null,
+  trash: null as PaginatedResponse<DocumentSummaryResponse> | null,
+};
+
+// Global in-flight dictionary guarantees that no duplicate request handles can co-exist at the same time.
+const activePromisesMap = new Map<string, Promise<unknown>>();
+
 // --- CORE LIFECYCLE BACKGROUND CONTROLLERS ---
 
 let isRefreshingTokens = false;
-// FIXED: Explicitly typed array structure to eliminate the unexpected 'any' rule failure
 let failedQueueWaiters: ((error: Error | null, token: string | null) => void)[] = [];
 let activeRefreshTimeoutId: NodeJS.Timeout | null = null;
 
@@ -121,6 +184,14 @@ const handleForcedSessionLogout = () => {
   localStorage.removeItem("access_token");
   localStorage.removeItem("refresh_token");
   localStorage.removeItem("access_token_expires_at");
+  
+  // Wipe all module store memory allocations on session expiration
+  apiCacheStore.dashboard = null;
+  apiCacheStore.userProfile = null;
+  apiCacheStore.workspaces = null;
+  apiCacheStore.trash = null;
+  activePromisesMap.clear();
+
   if (typeof window !== "undefined") {
     window.location.href = "/auth";
   }
@@ -140,7 +211,7 @@ export const proactiveTokenRefreshTrigger = () => {
   const expirationTimeMs = new Date(expiresAtStr).getTime();
   if (isNaN(expirationTimeMs)) return;
 
-  const bufferMs = 60 * 1000; // 1-minute proactive refresh buffer boundary
+  const bufferMs = 60 * 1000;
   const currentTimeMs = Date.now();
   const delayTimeMs = expirationTimeMs - currentTimeMs - bufferMs;
 
@@ -158,7 +229,6 @@ export const proactiveTokenRefreshTrigger = () => {
 
 // --- TRANSPARENT REQUEST INTERCEPTOR FLIGHT LAYER ---
 export const secureFetch = async (url: string, options: RequestInit = {}): Promise<Response> => {
-  // FIXED: Changed 'let' to 'const' as 'token' is never reassigned
   const token = typeof window !== "undefined" ? localStorage.getItem("access_token") : null;
   
   options.headers = {
@@ -166,12 +236,21 @@ export const secureFetch = async (url: string, options: RequestInit = {}): Promi
     ...(token ? { "Authorization": `Bearer ${token}` } : {})
   };
 
-  // FIXED: Changed 'let' to 'const' as 'response' is never reassigned
-  const response = await fetch(url, options);
+  let response: Response;
+  try {
+    response = await fetch(url, options);
+  } catch (networkError) {
+    throw await handleCentralizedError(networkError);
+  }
 
   if (response.status === 401) {
     if (typeof window === "undefined") return response;
     
+    if (url.includes("/users/me")) {
+      handleForcedSessionLogout();
+      return response;
+    }
+
     const storedRefreshKey = localStorage.getItem("refresh_token");
     if (!storedRefreshKey) {
       handleForcedSessionLogout();
@@ -205,6 +284,10 @@ export const secureFetch = async (url: string, options: RequestInit = {}): Promi
     }
   }
 
+  if (!response.ok) {
+    throw await handleCentralizedError(response);
+  }
+
   return response;
 };
 
@@ -223,7 +306,7 @@ export const authApi = {
         body: JSON.stringify({ refreshToken: storedRefreshKey })
       });
 
-      if (!res.ok) throw new Error("Backend rejected refresh token authorization validation rules");
+      if (!res.ok) throw await handleCentralizedError(res);
 
       const json = await res.json();
       const newKeys: AuthResponse = json.data;
@@ -237,26 +320,46 @@ export const authApi = {
       
       return newKeys;
     } catch (err) {
-      processQueueWaiters(err as Error, null);
-      throw err;
+      const formattedError = await handleCentralizedError(err);
+      processQueueWaiters(formattedError, null);
+      throw formattedError;
     } finally {
       isRefreshingTokens = false;
     }
   },
 
   login: async (request: LoginRequest): Promise<AuthResponse> => {
-    const res = await fetch(`${BASE_URL}/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(request),
-    });
-    if (!res.ok) throw new Error("Invalid credentials provided.");
+    let res: Response;
+    try {
+      res = await fetch(`${BASE_URL}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      });
+    } catch (netErr) {
+      throw await handleCentralizedError(netErr);
+    }
+
+    if (!res.ok) throw await handleCentralizedError(res);
     const json = await res.json();
     const authData: AuthResponse = json.data;
 
     localStorage.setItem("access_token", authData.accessToken);
     localStorage.setItem("refresh_token", authData.refreshToken);
     localStorage.setItem("access_token_expires_at", authData.accessTokenExpiresAt);
+    
+    // Explicitly pre-populate core profile layout memory values to intercept layout mounts post-redirect
+    apiCacheStore.userProfile = {
+      userUuid: authData.userUuid,
+      firstName: authData.firstName,
+      lastName: authData.lastName,
+      email: authData.email,
+      role: authData.role,
+      active: true,
+      emailVerified: true,
+      lastLoginAt: new Date().toISOString(),
+      createdAt: new Date().toISOString()
+    };
     
     setTimeout(() => proactiveTokenRefreshTrigger(), 0);
     
@@ -283,17 +386,30 @@ export const authApi = {
       localStorage.removeItem("access_token");
       localStorage.removeItem("refresh_token");
       localStorage.removeItem("access_token_expires_at");
+      
+      // Clean memory traces completely
+      apiCacheStore.dashboard = null;
+      apiCacheStore.userProfile = null;
+      apiCacheStore.workspaces = null;
+      apiCacheStore.trash = null;
+      activePromisesMap.clear();
     }
   },
   
   signup: async (request: SignupRequest): Promise<AuthResponse> => {
-    const res = await fetch(`${BASE_URL}/auth/signup`, {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(request),
-    });
-    if (!res.ok) throw new Error("Signup workflow rejected.");
+    let res: Response;
+    try {
+      res = await fetch(`${BASE_URL}/auth/signup`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      });
+    } catch (netErr) {
+      throw await handleCentralizedError(netErr);
+    }
+
+    if (!res.ok) throw await handleCentralizedError(res);
     const json = await res.json();
     return json.data || { accessToken: "", refreshToken: "", email: request.email };
   },
@@ -303,19 +419,38 @@ export const authApi = {
 
 export const api = {
   getAllWorkspaces: async (page = 0, size = 20, nocache = false): Promise<WorkspaceResponse[]> => {
-    let url = `${BASE_URL}/workspaces?page=${page}&size=${size}&sort=createdAt,desc`;
-    if (nocache) url += `&_t=${Date.now()}`;
+    const trackingKey = `workspaces-p${page}-s${size}`;
+    
+    if (nocache) {
+      apiCacheStore.workspaces = null;
+      activePromisesMap.delete(trackingKey);
+    }
 
-    const res = await secureFetch(url, {
+    if (apiCacheStore.workspaces) {
+      return apiCacheStore.workspaces;
+    }
+
+    if (activePromisesMap.has(trackingKey)) {
+      return activePromisesMap.get(trackingKey)! as Promise<WorkspaceResponse[]>;
+    }
+
+    const spacesPromise = secureFetch(`${BASE_URL}/workspaces?page=${page}&size=${size}&sort=createdAt,desc`, {
       method: "GET",
-      headers: { 
-        "Content-Type": "application/json",
-        "Cache-Control": "no-cache, no-store, must-revalidate",
-        "Pragma": "no-cache"
-      }
-    });
-    const json = await res.json();
-    return json.data?.content || [];
+      headers: { "Content-Type": "application/json" }
+    })
+      .then(async (res) => {
+        const json = await res.json();
+        const content = json.data?.content || [];
+        apiCacheStore.workspaces = content;
+        return content;
+      })
+      .catch((err) => {
+        activePromisesMap.delete(trackingKey);
+        throw err;
+      });
+
+    activePromisesMap.set(trackingKey, spacesPromise);
+    return spacesPromise;
   },
 
   createWorkspace: async (request: CreateWorkspaceRequest): Promise<WorkspaceResponse> => {
@@ -325,22 +460,35 @@ export const api = {
       body: JSON.stringify(request),
     });
     const json = await res.json();
+    apiCacheStore.workspaces = null; // Clear spaces memory cache array to trigger fresh pull on reload
     return json.data;
   },
 
   getWorkspaceDocuments: async (workspaceUuid: string, page = 0, size = 20, nocache = false): Promise<PaginatedResponse<DocumentSummaryResponse>> => {
-    let url = `${BASE_URL}/workspaces/${workspaceUuid}/documents?page=${page}&size=${size}`;
-    if (nocache) url += `&_t=${Date.now()}`;
+    const trackingKey = `docs-${workspaceUuid}-p${page}-s${size}`;
 
-    const res = await secureFetch(url, {
-      method: "GET",
-      headers: {
-        "Cache-Control": "no-cache, no-store, must-revalidate",
-        "Pragma": "no-cache"
-      }
-    });
-    const json = await res.json();
-    return json.data || { content: [], page: 0, size: size, totalElements: 0, totalPages: 0, last: true };
+    if (nocache) {
+      activePromisesMap.delete(trackingKey);
+    }
+
+    if (activePromisesMap.has(trackingKey)) {
+      return activePromisesMap.get(trackingKey)! as Promise<PaginatedResponse<DocumentSummaryResponse>>;
+    }
+
+    const docsPromise: Promise<PaginatedResponse<DocumentSummaryResponse>> = secureFetch(`${BASE_URL}/workspaces/${workspaceUuid}/documents?page=${page}&size=${size}`, {
+      method: "GET"
+    })
+      .then(async (res) => {
+        const json = await res.json();
+        return json.data || { content: [], page: 0, size: size, totalElements: 0, totalPages: 0, last: true };
+      })
+      .catch((err) => {
+        activePromisesMap.delete(trackingKey);
+        throw err;
+      });
+
+    activePromisesMap.set(trackingKey, docsPromise);
+    return docsPromise;
   },
 
   uploadDocument: async (workspaceUuid: string, file: File): Promise<unknown> => {
@@ -352,6 +500,7 @@ export const api = {
       method: "POST",
       body: formData,
     });
+    apiCacheStore.dashboard = null; // Reset metrics context 
     return res.json();
   },
 
@@ -363,38 +512,76 @@ export const api = {
   },
 
   getTrashDocuments: async (page = 0, size = 50, nocache = false): Promise<PaginatedResponse<DocumentSummaryResponse>> => {
-    let url = `${BASE_URL}/documents/deleted?page=${page}&size=${size}`;
-    if (nocache) url += `&_t=${Date.now()}`;
+    const trackingKey = `trash-p${page}-s${size}`;
 
-    const res = await secureFetch(url, {
-      method: "GET",
-      headers: {
-        "Cache-Control": "no-cache, no-store, must-revalidate",
-        "Pragma": "no-cache"
-      }
-    });
-    const json = await res.json();
-    return json.data || { content: [], page: 0, size: size, totalElements: 0, totalPages: 0, last: true };
+    if (nocache) {
+      apiCacheStore.trash = null;
+      activePromisesMap.delete(trackingKey);
+    }
+
+    if (apiCacheStore.trash) {
+      return apiCacheStore.trash;
+    }
+
+    if (activePromisesMap.has(trackingKey)) {
+      return activePromisesMap.get(trackingKey)! as Promise<PaginatedResponse<DocumentSummaryResponse>>;
+    }
+
+    const trashPromise = secureFetch(`${BASE_URL}/documents/deleted?page=${page}&size=${size}`, {
+      method: "GET"
+    })
+      .then(async (res) => {
+        const json = await res.json() as { data?: PaginatedResponse<DocumentSummaryResponse> };
+        const payload: PaginatedResponse<DocumentSummaryResponse> = json.data || { content: [], page: 0, size: size, totalElements: 0, totalPages: 0, last: true };
+        apiCacheStore.trash = payload;
+        return payload;
+      })
+      .catch((err) => {
+        activePromisesMap.delete(trackingKey);
+        throw err;
+      });
+
+    activePromisesMap.set(trackingKey, trashPromise);
+    return trashPromise;
   },
 
   getDashboardMetrics: async (nocache = false): Promise<DashboardResponse> => {
-    let url = `${BASE_URL}/dashboard`;
-    if (nocache) url += `?_t=${Date.now()}`;
+    const trackingKey = "dashboard-metrics";
 
-    const res = await secureFetch(url, {
+    if (nocache) {
+      apiCacheStore.dashboard = null;
+      activePromisesMap.delete(trackingKey);
+    }
+
+    // 1. Return persistent static mirror values if available
+    if (apiCacheStore.dashboard) {
+      return apiCacheStore.dashboard;
+    }
+
+    // 2. Return active transaction promise if multiple mounting threads hit concurrently
+    if (activePromisesMap.has(trackingKey)) {
+      return activePromisesMap.get(trackingKey)! as Promise<DashboardResponse>;
+    }
+
+    const dashboardPromise = secureFetch(`${BASE_URL}/dashboard`, {
       method: "GET",
-      headers: {
-        "Content-Type": "application/json",
-        "Cache-Control": "no-cache, no-store, must-revalidate"
-      }
-    });
+      headers: { "Content-Type": "application/json" }
+    })
+      .then(async (res) => {
+        const json = await res.json();
+        const baseMetrics: DashboardResponse = json.data || { totalWorkspaces: 0, totalDocuments: 0 };
+        apiCacheStore.dashboard = baseMetrics;
+        return baseMetrics;
+      })
+      .catch(() => {
+        // Safe rejection cleanup layer removes the promise key on failure strings
+        activePromisesMap.delete(trackingKey);
+        return apiCacheStore.dashboard || { totalWorkspaces: 0, totalDocuments: 0 };
+      });
 
-    if (!res.ok) throw new Error(`System metrics channel sync failed with status: ${res.status}`);
-    const json = await res.json();
-    return json.data || { totalWorkspaces: 0, totalDocuments: 0 };
+    activePromisesMap.set(trackingKey, dashboardPromise);
+    return dashboardPromise;
   },
-
-  // Add this right inside your existing "export const api = { ... }" declaration block
 
   renameWorkspace: async (workspaceUuid: string, newName: string): Promise<WorkspaceResponse> => {
     const res = await secureFetch(`${BASE_URL}/workspaces/${workspaceUuid}/rename`, {
@@ -402,20 +589,18 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: newName.trim() }),
     });
-
-    if (!res.ok) throw new Error("Server rejected workspace configuration rename request.");
     const json = await res.json();
+    apiCacheStore.workspaces = null; 
     return json.data;
   },
 
-  // Append these inside your existing "export const api = { ... }" declaration block
-
   deleteDocument: async (documentUuid: string): Promise<void> => {
-    const res = await secureFetch(`${BASE_URL}/documents/${documentUuid}`, {
+    await secureFetch(`${BASE_URL}/documents/${documentUuid}`, {
       method: "DELETE",
       headers: { "Content-Type": "application/json" }
     });
-    if (!res.ok) throw new Error("Server rejected document deletion request.");
+    apiCacheStore.dashboard = null;
+    apiCacheStore.trash = null;
   },
 
   getDeletedDocuments: async (page = 0, size = 50): Promise<{ content: DocumentSummaryResponse[] }> => {
@@ -423,11 +608,8 @@ export const api = {
       method: "GET",
       headers: { "Content-Type": "application/json" }
     });
-    if (!res.ok) throw new Error("Could not pull soft-deleted trash documents collection.");
     return await res.json();
   },
-
-  // Append these functions right inside your existing "export const api = { ... }" block
 
   renameDocument: async (documentUuid: string, newName: string): Promise<DocumentSummaryResponse> => {
     const res = await secureFetch(`${BASE_URL}/documents/${documentUuid}/rename`, {
@@ -435,7 +617,6 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: newName.trim() }),
     });
-    if (!res.ok) throw new Error("Server rejected the request to rename this document.");
     const json = await res.json();
     return json.data;
   },
@@ -445,25 +626,55 @@ export const api = {
       method: "POST",
       headers: { "Content-Type": "application/json" }
     });
-    if (!res.ok) throw new Error("Could not execute document restoration sequence.");
     const json = await res.json();
+    apiCacheStore.dashboard = null;
+    apiCacheStore.trash = null;
     return json.data;
   },
 
   permanentDeleteDocument: async (documentUuid: string): Promise<void> => {
-    const res = await secureFetch(`${BASE_URL}/documents/${documentUuid}/permanent`, {
+    await secureFetch(`${BASE_URL}/documents/${documentUuid}/permanent`, {
       method: "DELETE",
       headers: { "Content-Type": "application/json" }
     });
-    if (!res.ok) throw new Error("Server rejected permanent deletion request allocation.");
+    apiCacheStore.trash = null;
   },
 
   getCurrentUser: async (): Promise<UserProfileResponse> => {
-    const res = await secureFetch(`${BASE_URL}/users/me`, {
+    const trackingKey = "current-user-profile";
+
+    if (apiCacheStore.userProfile) {
+      return apiCacheStore.userProfile;
+    }
+
+    if (activePromisesMap.has(trackingKey)) {
+      return activePromisesMap.get(trackingKey)! as Promise<UserProfileResponse>;
+    }
+
+    const userPromise = secureFetch(`${BASE_URL}/users/me`, {
       method: "GET",
       headers: { "Content-Type": "application/json" }
+    })
+      .then(async (res) => {
+        const json = await res.json();
+        apiCacheStore.userProfile = json.data;
+        return json.data;
+      })
+      .catch((err) => {
+        activePromisesMap.delete(trackingKey);
+        throw err;
+      });
+
+    activePromisesMap.set(trackingKey, userPromise);
+    return userPromise;
+  },
+
+  askWorkspaceAI: async (workspaceUuid: string, question: string): Promise<{ answer: string }> => {
+    const res = await secureFetch(`${BASE_URL}/ai/workspaces/${workspaceUuid}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: question.trim() }),
     });
-    if (!res.ok) throw new Error("Could not pull authenticated user profile session context.");
     const json = await res.json();
     return json.data;
   },

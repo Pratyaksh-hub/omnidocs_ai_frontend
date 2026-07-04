@@ -2,8 +2,8 @@
 
 import React, { useState } from "react";
 import { useRouter } from "next/navigation";
-import { authApi } from "@/services/api";
 import { Loader2, ShieldAlert, Eye, EyeOff, Lock, Mail, User, ShieldCheck, CheckCircle2 } from "lucide-react";
+import { authApi } from "@/lib/api";
 
 export default function AuthenticationPage() {
   const router = useRouter();
@@ -59,13 +59,15 @@ export default function AuthenticationPage() {
         setIsLoginView(true); // Bounce back to login card view automatically
         setPassword("");      // Clear password field for security
       }
-    } catch (err) {
-      console.error(err);
-      setErrorMessage(
-        isLoginView
-          ? "Authentication failed. Double check your credentials."
-          : "Account initialization failed. The email might be taken."
-      );
+    } catch (err: unknown) {
+      console.error("Auth submit fell through to boundary handle:", err);
+      
+      // FIXED: Safely intercepts normalized central network error strings directly 
+      if (err instanceof Error) {
+        setErrorMessage(err.message);
+      } else {
+        setErrorMessage("An unexpected transport anomaly occurred. Please try again.");
+      }
     } finally {
       setSubmitting(false);
     }
@@ -105,7 +107,7 @@ export default function AuthenticationPage() {
 
         <form onSubmit={handleFormSubmission} className="space-y-5">
           
-          {/* Split Name Parameters Layout using Dummy Placeholders */}
+          {/* Split Name Parameters Layout */}
           {!isLoginView && (
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
@@ -187,7 +189,7 @@ export default function AuthenticationPage() {
           <button
             type="submit"
             disabled={submitting}
-            className="w-full mt-2 flex items-center justify-center gap-2 rounded-xl bg-blue-600 py-3 text-sm font-semibold text-white shadow-md hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full mt-2 flex items-center justify-center gap-2 rounded-xl bg-blue-600 py-3 text-sm font-semibold text-white shadow-md hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
           >
             {submitting ? (
               <>
@@ -205,7 +207,7 @@ export default function AuthenticationPage() {
             {isLoginView ? "New to OmniDocs AI?" : "Already verified?"}{" "}
             <button
               onClick={handleToggleView}
-              className="font-bold text-blue-600 dark:text-blue-400 hover:underline outline-none"
+              className="font-bold text-blue-600 dark:text-blue-400 hover:underline outline-none cursor-pointer"
               disabled={submitting}
             >
               {isLoginView ? "Create an account" : "Sign in here"}

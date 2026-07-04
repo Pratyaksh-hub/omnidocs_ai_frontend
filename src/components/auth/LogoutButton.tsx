@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { authApi } from "@/services/api";
 import { LogOut, Loader2 } from "lucide-react";
+import { authApi } from "@/lib/api";
 
 export default function LogoutButton() {
   const router = useRouter();
