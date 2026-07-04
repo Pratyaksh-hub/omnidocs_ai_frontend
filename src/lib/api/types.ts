@@ -212,3 +212,14 @@ export interface SecurityPool {
 
   createdAt: string;
 }
+
+export interface SecurityPoolItem {
+  poolUuid: string;
+  name: string;
+  description: string;
+  associatedWorkspacesCount: number;
+  piiRedactionActive: boolean;
+  allowedRoleTier: "USER" | "ADMIN" | "SYSTEM_ROOT";
+  totalEmbeddedVectors: number;
+  createdAt: string;
+}
